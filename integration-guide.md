@@ -1,7 +1,7 @@
 # Account Server Integration Guide
 
-**Version:** 1.3.0
-**Last Updated:** 2026-01-20
+**Version:** 3.0.0
+**Last Updated:** 2026-01-22
 
 ---
 
@@ -9,40 +9,104 @@
 
 All endpoints use the base URL: `https://auth.interactor.com/api/v1`
 
-| Action | Method | Endpoint | Required Fields | Optional Fields |
-|--------|--------|----------|-----------------|-----------------|
-| Register | POST | `/auth/register` | `email`, `password` | `redirect_uri`, `organization_name` |
-| Login | POST | `/auth/login` | `email`, `password` | |
-| MFA Login | POST | `/auth/login/mfa` | `mfa_token`, `code` | |
-| Refresh Token | POST | `/auth/refresh` | `refresh_token` | |
-| Logout | POST | `/auth/logout` | | `refresh_token` |
-| Verify Email | GET/POST | `/auth/verify-email` | `token` | |
-| Resend Verification | POST | `/auth/resend-verification` | `email` | `redirect_uri` |
-| Request Password Reset | POST | `/auth/password/reset-request` | `email` | `redirect_uri` |
-| Reset Password | POST | `/auth/password/reset` | `token`, `password` | `success_redirect_uri` |
-| Change Password | POST | `/auth/password/change` | `current_password`, `new_password` | |
+### Administrator Endpoints (Public)
 
-> **Note:** Missing required fields will return a 400 Bad Request with a `missing_required_fields` error code listing which fields are missing.
+| Action | Method | Endpoint | Auth Required |
+|--------|--------|----------|---------------|
+| Register | POST | `/admin/register` | No |
+| Verify Email | GET/POST | `/admin/verify-email` | No |
+| Login | POST | `/admin/login` | No |
+| MFA Login | POST | `/admin/login/mfa` | No |
+| Refresh Token | POST | `/admin/refresh` | No |
+| Password Reset Request | POST | `/admin/password/reset-request` | No |
+| Password Reset | POST | `/admin/password/reset` | No |
+
+### Administrator Profile Endpoints (Admin JWT)
+
+| Action | Method | Endpoint | Auth Required |
+|--------|--------|----------|---------------|
+| Get Profile | GET | `/admin` | Admin JWT |
+| Update Profile | PATCH | `/admin` | Admin JWT |
+| Logout | POST | `/admin/logout` | Admin JWT |
+| Change Password | POST | `/admin/password/change` | Admin JWT |
+| Enable MFA | POST | `/admin/mfa/enable` | Admin JWT |
+| Verify MFA | POST | `/admin/mfa/verify` | Admin JWT |
+| Disable MFA | POST | `/admin/mfa/disable` | Admin JWT |
+
+### Organization Endpoints (Admin JWT)
+
+| Action | Method | Endpoint | Auth Required |
+|--------|--------|----------|---------------|
+| List Orgs | GET | `/admin/orgs` | Admin JWT |
+| Create Org | POST | `/admin/orgs` | Admin JWT |
+| Get Org | GET | `/admin/orgs/:org_name` | Admin JWT |
+| Update Org | PATCH | `/admin/orgs/:org_name` | Admin JWT |
+| Delete Org | DELETE | `/admin/orgs/:org_name` | Admin JWT (owner) |
+
+### Application Endpoints (Admin JWT + Org Context)
+
+| Action | Method | Endpoint | Auth Required |
+|--------|--------|----------|---------------|
+| List Apps | GET | `/admin/orgs/:org_name/applications` | Admin JWT |
+| Create App | POST | `/admin/orgs/:org_name/applications` | Admin JWT |
+| Get App | GET | `/admin/orgs/:org_name/applications/:id` | Admin JWT |
+| Update App | PATCH | `/admin/orgs/:org_name/applications/:id` | Admin JWT |
+| Rotate Secret | POST | `/admin/orgs/:org_name/applications/:id/rotate-secret` | Admin JWT |
+| Delete App | DELETE | `/admin/orgs/:org_name/applications/:id` | Admin JWT |
+
+### OAuth Endpoint (Public)
+
+| Action | Method | Endpoint | Auth Required |
+|--------|--------|----------|---------------|
+| Get Token | POST | `/oauth/token` | Client Credentials |
+
+### User Management Endpoints (Admin or App JWT)
+
+| Action | Method | Endpoint | Auth Required |
+|--------|--------|----------|---------------|
+| List Users | GET | `/orgs/:org_name/users` | Admin or App JWT |
+| Create User | POST | `/orgs/:org_name/users` | Admin or App JWT |
+| Get User | GET | `/orgs/:org_name/users/:user_id` | Admin or App JWT |
+| Update User | PATCH | `/orgs/:org_name/users/:user_id` | Admin or App JWT |
+| Delete User | DELETE | `/orgs/:org_name/users/:user_id` | Admin or App JWT |
+
+### User Authentication Endpoints (Public)
+
+| Action | Method | Endpoint | Auth Required |
+|--------|--------|----------|---------------|
+| User Login | POST | `/users/login` | No |
+| User MFA Login | POST | `/users/login/mfa` | No |
+| User Refresh | POST | `/users/refresh` | No |
 
 ---
 
 ## Overview
 
-The Account Server is the **central identity provider** for your internal application suite. It enables Single Sign-On (SSO) across all your applications - when a user logs into one app, their JWT works across all apps that trust the Account Server.
+The Account Server provides a **four-tier hierarchical authentication system** for multi-tenant platforms:
+
+```
+Administrator (you sign up here)
+    └── Organization (named container, e.g., "acme-corp")
+            ├── Applications (your backend services)
+            │   └── Get app JWT via OAuth 2.0 client credentials
+            └── Users (your end users)
+                └── Authenticate with username/password
+```
+
+### Key Concepts
+
+- **Administrators** sign up and manage organizations
+- **Organizations** are named containers (globally unique names like GitHub usernames)
+- **Applications** are M2M OAuth clients for your backend services
+- **Users** are end-users of your application
 
 ### Who This Guide Is For
 
-This guide is for **your internal development team** building applications that use Account Server for user authentication.
+This guide is for developers building applications that integrate with the Interactor platform. You'll use Account Server to:
 
-> **Building a third-party integration with Interactor?** See the [Interactor Integration Guide](../../interactor/docs/integration-guide.md) instead - you'll use OAuth Client Credentials to authenticate your backend service.
-
-### What Account Server Provides
-
-- **User Registration & Login**: Email/password authentication with email verification
-- **JWT Tokens**: RS256-signed tokens verified via JWKS endpoint
-- **SSO Across Your Apps**: One user identity works across all your internal apps
-- **MFA**: Optional TOTP-based multi-factor authentication
-- **Password Management**: Reset flows, password change, requirements enforcement
+1. **Register as an administrator** and create your first organization
+2. **Create applications** that call Interactor APIs
+3. **Manage users** for your application
 
 ### Base URL
 
@@ -55,54 +119,67 @@ Production: https://auth.interactor.com/api/v1
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        YOUR APPLICATION SUITE                                │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌───────────────┐   ┌───────────────┐   ┌───────────────┐                  │
-│  │   App A       │   │   App B       │   │   App C       │                  │
-│  │   (Web)       │   │   (Mobile)    │   │   (Dashboard) │                  │
-│  │               │   │               │   │               │                  │
-│  │ Validates JWT │   │ Validates JWT │   │ Validates JWT │                  │
-│  │ via JWKS      │   │ via JWKS      │   │ via JWKS      │                  │
-│  └───────┬───────┘   └───────┬───────┘   └───────┬───────┘                  │
-│          │                   │                   │                           │
-│          │         ┌─────────┴─────────┐         │                           │
-│          │         │                   │         │                           │
-│          └─────────┤  Account Server   ├─────────┘                           │
-│                    │                   │                                     │
-│                    │  - User accounts  │                                     │
-│                    │  - Login/Register │                                     │
-│                    │  - JWT issuance   │                                     │
-│                    │  - JWKS endpoint  │                                     │
-│                    └───────────────────┘                                     │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-User logs into App A → Gets JWT → Same JWT works in App B and App C
+┌─────────────────────────────────────────────────────────────────┐
+│                     YOUR PLATFORM                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌───────────────────┐                                          │
+│  │   Administrator   │ ← Admin JWT for management               │
+│  │   (Admin Portal)  │                                          │
+│  └─────────┬─────────┘                                          │
+│            │ manages                                             │
+│  ┌─────────┴─────────┐                                          │
+│  │   Organization    │ ← Named container (e.g., "acme-corp")    │
+│  │   (acme-corp)     │                                          │
+│  └─────────┬─────────┘                                          │
+│            │                                                     │
+│  ┌─────────┴─────────────────────┐                              │
+│  │                               │                               │
+│  ▼                               ▼                               │
+│  ┌───────────────┐    ┌───────────────┐                         │
+│  │  Application  │    │     Users     │                         │
+│  │  (Backend)    │    │  (End Users)  │                         │
+│  │               │    │               │                         │
+│  │ App JWT with  │    │ User JWT with │                         │
+│  │ org claim     │    │ org claim     │                         │
+│  └───────┬───────┘    └───────────────┘                         │
+│          │                                                       │
+│          │  API calls with App JWT                              │
+│          ▼                                                       │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │              Interactor / Knowledge Base                   │  │
+│  │                                                            │  │
+│  │  Validates JWT via JWKS, extracts org from token          │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Quick Start
 
-### 1. User Registration
+### 1. Register as an Administrator
 
-Your app's registration form calls the Account Server API:
+When you register, you create both your admin account and your first organization:
 
 ```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/register \
+curl -X POST https://auth.interactor.com/api/v1/admin/register \
   -H "Content-Type: application/json" \
   -d '{
-    "email": "user@example.com",
-    "password": "SecureP@ssw0rd!"
+    "email": "admin@yourcompany.com",
+    "password": "SecureP@ssw0rd!",
+    "org_name": "your-company"
   }'
 ```
 
-**Optional Fields:**
-- `organization_name`: Company or organization name (string, max 255 chars)
+**Organization Name Requirements:**
+- 3-50 characters
+- Lowercase letters, numbers, and hyphens only
+- Must start with a letter
+- Globally unique (like GitHub usernames)
 
-**Password Requirements:**
+**Password Requirements (Administrator):**
 - Minimum 12 characters
 - At least one uppercase letter
 - At least one lowercase letter
@@ -112,118 +189,201 @@ curl -X POST https://auth.interactor.com/api/v1/auth/register \
 **Response:**
 ```json
 {
-  "data": {
-    "account_id": "acc_abc123",
-    "email": "user@example.com",
-    "organization_name": null,
-    "status": "pending_verification",
-    "message": "Please check your email to verify your account"
-  }
+  "message": "Registration successful. Please check your email to verify your account.",
+  "admin_id": "adm_abc123",
+  "verification_token": "..."
 }
 ```
 
-### 2. Email Verification
+### 2. Verify Email
 
-Users receive a verification email and click the link. When they click it:
+Click the verification link in your email, or call:
 
-- **Default behavior**: Account Server displays a simple HTML success page confirming verification, then the user can close the tab and log into your app
-- **With `redirect_uri`**: If you provide a `redirect_uri` during registration, users are redirected there with `?status=success` appended
-
-**Registration with redirect:**
 ```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
-    "password": "SecureP@ssw0rd!",
-    "redirect_uri": "https://myapp.com/verified"
-  }'
+curl "https://auth.interactor.com/api/v1/admin/verify-email?token=YOUR_TOKEN"
 ```
 
-After clicking the email link, the user would be redirected to `https://myapp.com/verified?status=success`.
+### 3. Login as Administrator
 
-**Resend verification:**
 ```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/resend-verification \
-  -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com"}'
-```
-
-You can also include a `redirect_uri` when resending:
-```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/resend-verification \
+curl -X POST https://auth.interactor.com/api/v1/admin/login \
   -H "Content-Type: application/json" \
   -d '{
-    "email": "user@example.com",
-    "redirect_uri": "https://myapp.com/verified"
-  }'
-```
-
-### 3. User Login
-
-```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
+    "email": "admin@yourcompany.com",
     "password": "SecureP@ssw0rd!"
   }'
 ```
 
-**Success Response:**
+**Response:**
 ```json
 {
-  "data": {
-    "access_token": "eyJhbGciOiJSUzI1NiIs...",
-    "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
-    "token_type": "Bearer",
-    "expires_in": 900
-  }
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 900
 }
 ```
 
-**MFA Required Response:**
-```json
-{
-  "data": {
-    "mfa_required": true,
-    "mfa_token": "mfa_session_token"
-  }
-}
-```
+### 4. Create an Application
 
-If MFA is enabled, complete login with:
+Use your admin JWT to create an application within your organization:
+
 ```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/login/mfa \
+curl -X POST https://auth.interactor.com/api/v1/admin/orgs/your-company/applications \
+  -H "Authorization: Bearer <admin_access_token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "mfa_token": "mfa_session_token",
-    "code": "123456"
+    "name": "Production Backend",
+    "description": "Main production server",
+    "scopes": ["interactor:read", "interactor:write"]
   }'
 ```
 
-### 4. Token Refresh
-
-Access tokens expire after 15 minutes. Use the refresh token to get a new one:
-
-```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+**Response:**
+```json
+{
+  "client_id": "app_xyz789",
+  "client_secret": "sec_STORE_THIS_SECURELY",
+  "name": "Production Backend",
+  "scopes": ["interactor:read", "interactor:write"],
+  "status": "active",
+  "created_at": "2026-01-22T00:00:00Z"
+}
 ```
 
-### 5. Logout
+> **Important:** Save the `client_secret` immediately. It is only shown once!
+
+### 5. Get an Application Token
+
+Your backend uses OAuth 2.0 client credentials to get an access token:
 
 ```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/logout \
-  -H "Authorization: Bearer <access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+curl -X POST https://auth.interactor.com/api/v1/oauth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id=app_xyz789&client_secret=sec_STORE_THIS_SECURELY"
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "scope": "interactor:read interactor:write"
+}
+```
+
+The app token contains an `org` claim with your organization name (e.g., `"org": "your-company"`).
+
+### 6. Use the Token to Call APIs
+
+```bash
+curl https://core.interactor.com/api/v1/some-endpoint \
+  -H "Authorization: Bearer <app_access_token>"
 ```
 
 ---
 
-## JWT Verification in Your Apps
+## User Management
+
+Organizations and applications can create and manage users. Users authenticate with org + username + password and receive their own JWTs.
+
+### Create a User
+
+```bash
+curl -X POST https://auth.interactor.com/api/v1/orgs/your-company/users \
+  -H "Authorization: Bearer <admin_or_app_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "johndoe",
+    "password": "Password123@",
+    "email": "john@example.com",
+    "metadata": {"department": "Engineering"}
+  }'
+```
+
+**Password Requirements (User):**
+- Minimum 8 characters
+- At least one uppercase letter
+- At least one lowercase letter
+- At least one number
+- At least one special character
+
+**Response:**
+```json
+{
+  "user_id": "usr_abc123",
+  "username": "johndoe",
+  "email": "john@example.com",
+  "status": "active",
+  "metadata": {"department": "Engineering"},
+  "mfa_enabled": false,
+  "created_at": "2026-01-22T00:00:00Z"
+}
+```
+
+### User Login
+
+Users authenticate with org name + username + password:
+
+```bash
+curl -X POST https://auth.interactor.com/api/v1/users/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org": "your-company",
+    "username": "johndoe",
+    "password": "Password123@"
+  }'
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+The user token contains an `org` claim and is valid for ALL applications in that organization.
+
+### List Users
+
+```bash
+curl https://auth.interactor.com/api/v1/orgs/your-company/users \
+  -H "Authorization: Bearer <admin_or_app_token>"
+```
+
+---
+
+## Token Refresh
+
+Access tokens expire after 15 minutes. Use refresh tokens to get new access tokens.
+
+### Administrator Token Refresh
+
+```bash
+curl -X POST https://auth.interactor.com/api/v1/admin/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+```
+
+### User Token Refresh
+
+```bash
+curl -X POST https://auth.interactor.com/api/v1/users/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+```
+
+### Application Token Refresh
+
+Applications don't have refresh tokens. Request a new token using client credentials when the current token expires.
+
+---
+
+## JWT Verification
 
 Your applications should validate JWTs locally using the JWKS endpoint. This is fast and doesn't require calling Account Server on every request.
 
@@ -233,59 +393,33 @@ Your applications should validate JWTs locally using the JWKS endpoint. This is 
 curl https://auth.interactor.com/.well-known/jwks.json
 ```
 
-**Response:**
-```json
-{
-  "keys": [
-    {
-      "kty": "RSA",
-      "kid": "key_2026_01",
-      "use": "sig",
-      "alg": "RS256",
-      "n": "...",
-      "e": "AQAB"
-    }
-  ]
-}
-```
+### Token Claims by Type
 
-### Token Claims
-
+**Administrator Token (`type: "admin"`):**
 | Claim | Description |
 |-------|-------------|
-| `sub` | Account ID (`acc_abc123`) |
-| `iss` | Issuer (`https://auth.interactor.com`) |
-| `aud` | Audience (service-specific) |
-| `exp` | Expiration timestamp |
-| `iat` | Issued at timestamp |
+| `sub` | Administrator ID (`adm_*`) |
+| `type` | `"admin"` |
+| `email` | Administrator email |
+| `scopes` | Granted scopes |
 
-### Example: Elixir/Phoenix Verification
+**Application Token (`type: "app"`):**
+| Claim | Description |
+|-------|-------------|
+| `sub` | Client ID (`app_*`) |
+| `type` | `"app"` |
+| `client_id` | Application client ID |
+| `org` | Organization name (e.g., `"your-company"`) |
+| `scopes` | Granted scopes |
 
-```elixir
-defmodule MyApp.Auth do
-  @jwks_url "https://auth.interactor.com/.well-known/jwks.json"
-
-  def verify_token(token) do
-    with {:ok, jwks} <- fetch_jwks(),
-         {:ok, claims} <- JOSE.JWT.verify(jwks, token) do
-      {:ok, claims}
-    end
-  end
-
-  defp fetch_jwks do
-    # Cache this - don't fetch on every request
-    case Cachex.get(:jwks_cache, "keys") do
-      {:ok, nil} ->
-        {:ok, %{body: body}} = HTTPoison.get(@jwks_url)
-        jwks = Jason.decode!(body)
-        Cachex.put(:jwks_cache, "keys", jwks, ttl: :timer.hours(1))
-        {:ok, jwks}
-      {:ok, jwks} ->
-        {:ok, jwks}
-    end
-  end
-end
-```
+**User Token (`type: "user"`):**
+| Claim | Description |
+|-------|-------------|
+| `sub` | User ID (`usr_*`) |
+| `type` | `"user"` |
+| `org` | Organization name (e.g., `"your-company"`) |
+| `username` | Username |
+| `scopes` | Granted scopes |
 
 ### Example: Node.js Verification
 
@@ -316,205 +450,118 @@ export function verifyToken(token: string): Promise<any> {
     });
   });
 }
-```
 
----
-
-## Password Management
-
-### Change Password (Authenticated)
-
-```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/password/change \
-  -H "Authorization: Bearer <access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "current_password": "OldP@ssw0rd!",
-    "new_password": "NewP@ssw0rd!"
-  }'
-```
-
-### Request Password Reset
-
-```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/password/reset-request \
-  -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com"}'
-```
-
-**With client redirect (for custom UI):**
-```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/password/reset-request \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
-    "redirect_uri": "https://myapp.com/reset-password"
-  }'
-```
-
-When `redirect_uri` is provided, the email link will point to your app instead of the Account Server's built-in form. The token is appended as a query parameter: `https://myapp.com/reset-password?token=abc123`
-
-### Reset Password with Token
-
-```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/password/reset \
-  -H "Content-Type: application/json" \
-  -d '{
-    "token": "reset_token_from_email",
-    "password": "NewP@ssw0rd!"
-  }'
-```
-
-**With success redirect:**
-```bash
-curl -X POST https://auth.interactor.com/api/v1/auth/password/reset \
-  -H "Content-Type: application/json" \
-  -d '{
-    "token": "reset_token_from_email",
-    "password": "NewP@ssw0rd!",
-    "success_redirect_uri": "https://myapp.com/login?reset=success"
-  }'
-```
-
-**Response with redirect:**
-```json
-{
-  "data": {
-    "message": "Password reset successfully",
-    "redirect_uri": "https://myapp.com/login?reset=success"
-  }
+// Verify and check token type
+const claims = await verifyToken(token);
+if (claims.type === 'app') {
+  // Application token - use for M2M API calls
+  console.log('App:', claims.client_id, 'Org:', claims.org);
+} else if (claims.type === 'user') {
+  // User token - use for user authentication
+  console.log('User:', claims.username, 'Org:', claims.org);
 }
 ```
-
-### Client-Side Password Reset Flow
-
-If you want to provide a custom password reset UI:
-
-1. **Request reset with redirect:**
-   ```
-   POST /api/v1/auth/password/reset-request
-   Body: { "email": "user@example.com", "redirect_uri": "https://myapp.com/reset-password" }
-   ```
-
-2. **User receives email** with link to your app: `https://myapp.com/reset-password?token=abc123`
-
-3. **Your app displays a password form** and collects the new password
-
-4. **Submit the new password:**
-   ```
-   POST /api/v1/auth/password/reset
-   Body: { "token": "abc123", "password": "NewP@ssw0rd!", "success_redirect_uri": "https://myapp.com/login" }
-   ```
-
-5. **On success**, redirect the user to the `redirect_uri` from the response (or handle as needed)
-
-> **Note:** Both `redirect_uri` and `success_redirect_uri` are validated against the `ALLOWED_REDIRECT_DOMAINS` configuration. Requests with unauthorized domains will be silently ignored (to prevent enumeration attacks).
 
 ---
 
 ## Multi-Factor Authentication (MFA)
 
+Administrators can enable TOTP-based MFA for additional security.
+
 ### Enable MFA
 
 ```bash
-curl -X POST https://auth.interactor.com/api/v1/account/mfa/enable \
-  -H "Authorization: Bearer <access_token>"
+curl -X POST https://auth.interactor.com/api/v1/admin/mfa/enable \
+  -H "Authorization: Bearer <admin_access_token>"
 ```
 
 **Response:**
 ```json
 {
-  "data": {
-    "secret": "base64_encoded_secret",
-    "otpauth_uri": "otpauth://totp/Interactor:user@example.com?secret=...&issuer=Interactor"
-  }
+  "secret": "BASE32SECRET",
+  "provisioning_uri": "otpauth://totp/AccountServer:admin@company.com?secret=...&issuer=AccountServer",
+  "qr_code": "data:image/png;base64,..."
 }
 ```
 
-Display the `otpauth_uri` as a QR code for the user to scan with their authenticator app.
+Display the QR code for the admin to scan with their authenticator app.
 
 ### Verify MFA Setup
 
-After user adds to their authenticator, verify with a code:
+```bash
+curl -X POST https://auth.interactor.com/api/v1/admin/mfa/verify \
+  -H "Authorization: Bearer <admin_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"code": "123456"}'
+```
+
+### MFA Login Flow
+
+When MFA is enabled, login returns an MFA challenge:
+
+```json
+{
+  "mfa_required": true,
+  "mfa_token": "mfa_session_xyz"
+}
+```
+
+Complete the login with the MFA code:
 
 ```bash
-curl -X POST https://auth.interactor.com/api/v1/account/mfa/verify \
-  -H "Authorization: Bearer <access_token>" \
+curl -X POST https://auth.interactor.com/api/v1/admin/login/mfa \
   -H "Content-Type: application/json" \
   -d '{
-    "secret": "base64_encoded_secret",
+    "mfa_token": "mfa_session_xyz",
     "code": "123456"
   }'
 ```
 
-**Response includes recovery codes:**
-```json
-{
-  "data": {
-    "mfa_enabled": true,
-    "recovery_codes": [
-      "ABCD-1234-EFGH",
-      "IJKL-5678-MNOP"
-    ],
-    "message": "MFA enabled successfully. Save your recovery codes in a safe place."
-  }
-}
-```
-
-> **Important:** Display recovery codes to the user and ask them to save them securely.
-
-### Disable MFA
-
-```bash
-curl -X POST https://auth.interactor.com/api/v1/account/mfa/disable \
-  -H "Authorization: Bearer <access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"password": "UserP@ssw0rd!"}'
-```
-
-### Regenerate Recovery Codes
-
-```bash
-curl -X POST https://auth.interactor.com/api/v1/account/mfa/recovery-codes \
-  -H "Authorization: Bearer <access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"password": "UserP@ssw0rd!"}'
-```
-
 ---
 
-## Account Management
+## Application Management
 
-### Get Account Info
+### List Applications
 
 ```bash
-curl https://auth.interactor.com/api/v1/account \
-  -H "Authorization: Bearer <access_token>"
+curl https://auth.interactor.com/api/v1/admin/orgs/your-company/applications \
+  -H "Authorization: Bearer <admin_access_token>"
+```
+
+### Update Application
+
+```bash
+curl -X PATCH https://auth.interactor.com/api/v1/admin/orgs/your-company/applications/<id> \
+  -H "Authorization: Bearer <admin_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Name",
+    "description": "Updated description"
+  }'
+```
+
+### Rotate Client Secret
+
+```bash
+curl -X POST https://auth.interactor.com/api/v1/admin/orgs/your-company/applications/<id>/rotate-secret \
+  -H "Authorization: Bearer <admin_access_token>"
 ```
 
 **Response:**
 ```json
 {
-  "data": {
-    "account_id": "acc_abc123",
-    "email": "user@example.com",
-    "organization_name": null,
-    "status": "active",
-    "mfa_enabled": true,
-    "created_at": "2026-01-01T00:00:00Z"
-  }
+  "client_secret": "sec_NEW_SECRET",
+  "previous_secret_expires_at": "2026-01-23T00:00:00Z"
 }
 ```
 
-### Update Account
+The old secret remains valid for 24 hours to allow for rolling deployments.
 
-You can set or update the optional `organization_name` field:
+### Delete Application
 
 ```bash
-curl -X PATCH https://auth.interactor.com/api/v1/account \
-  -H "Authorization: Bearer <access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"organization_name": "My Company"}'
+curl -X DELETE https://auth.interactor.com/api/v1/admin/orgs/your-company/applications/<id> \
+  -H "Authorization: Bearer <admin_access_token>"
 ```
 
 ---
@@ -536,16 +583,13 @@ All errors follow a consistent format:
 
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
-| `invalid_credentials` | 401 | Wrong email or password |
-| `email_not_verified` | 403 | Account email not verified |
-| `account_suspended` | 403 | Account has been suspended |
-| `account_closed` | 403 | Account has been closed |
+| `invalid_credentials` | 401 | Wrong email/password/username |
 | `invalid_token` | 401 | Token is invalid or expired |
-| `token_expired` | 401 | Token has expired |
-| `invalid_code` | 400 | Invalid MFA code |
-| `mfa_already_enabled` | 400 | MFA is already enabled |
-| `mfa_not_enabled` | 400 | MFA is not enabled |
-| `invalid_password` | 401 | Invalid password (for MFA disable/recovery) |
+| `email_not_verified` | 403 | Administrator email not verified |
+| `account_suspended` | 403 | Account has been suspended |
+| `forbidden` | 403 | Permission denied |
+| `not_found` | 404 | Resource not found |
+| `conflict` | 409 | Resource already exists (duplicate) |
 | `validation_error` | 422 | Request validation failed |
 | `rate_limited` | 429 | Too many requests |
 
@@ -553,85 +597,84 @@ All errors follow a consistent format:
 
 | Endpoint | Limit |
 |----------|-------|
-| `/auth/login` | 5 per minute per IP |
-| `/auth/register` | 3 per hour per IP |
-| `/auth/password/reset-request` | 3 per hour per email |
-| Authenticated endpoints | 100 per minute per account |
+| `/admin/login` | 5 per minute per IP |
+| `/admin/register` | 3 per hour per IP |
+| `/users/login` | 10 per minute per IP |
+| `/oauth/token` | 30 per minute per client_id |
+| Authenticated endpoints | 100 per minute per token |
 
 ---
 
-## API Reference
+## ID Formats
 
-### Public Endpoints (No Auth Required)
+All public IDs use prefixes for easy identification:
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/auth/register` | Create new account |
-| POST | `/auth/login` | Login with email/password |
-| POST | `/auth/login/mfa` | Complete MFA login |
-| POST | `/auth/refresh` | Refresh access token |
-| GET | `/auth/verify-email` | Verify email (from link) |
-| POST | `/auth/verify-email` | Verify email (programmatic) |
-| POST | `/auth/resend-verification` | Resend verification email |
-| POST | `/auth/password/reset-request` | Request password reset |
-| POST | `/auth/password/reset` | Reset password with token |
-| GET | `/.well-known/jwks.json` | Get public keys for JWT verification |
+| Entity | Prefix | Example |
+|--------|--------|---------|
+| Administrator | `adm_` | `adm_Ro5o8o9t-M` |
+| Application | `app_` | `app_isfZqMSUgiqf_KKzC3W6` |
+| User | `usr_` | `usr_VuUVJd8cE6` |
+| Client Secret | `sec_` | `sec_Lajg4iOkZBjmwaAwlaSXTSyULZ9mewcrVE88qNIne09T` |
 
-### Authenticated Endpoints (Bearer Token Required)
+---
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/auth/logout` | Revoke current session |
-| POST | `/auth/password/change` | Change password |
-| GET | `/account` | Get account info |
-| PATCH | `/account` | Update account |
-| POST | `/account/mfa/enable` | Start MFA setup |
-| POST | `/account/mfa/verify` | Complete MFA setup |
-| POST | `/account/mfa/disable` | Disable MFA |
-| POST | `/account/mfa/recovery-codes` | Regenerate recovery codes |
+## Best Practices
+
+### Token Management
+
+1. **Cache app tokens**: Don't request a new token for every API call
+2. **Refresh proactively**: Refresh tokens before they expire (e.g., when < 60 seconds remaining)
+3. **Handle expiration gracefully**: If a request fails with `invalid_token`, refresh and retry
+
+### Secret Storage
+
+1. **Never hardcode secrets**: Use environment variables or secrets managers
+2. **Use secret rotation**: Rotate secrets periodically using the rotate endpoint
+3. **Use separate apps per environment**: Don't share credentials between dev/staging/production
+
+### User Management
+
+1. **Usernames are per-org**: The same username can exist in different organizations
+2. **Store user_id**: Reference users by `user_id`, not username
+3. **User JWT is for authentication**: Your app handles authorization based on user claims
+4. **User tokens are org-wide**: A user JWT is valid for all apps in the organization
 
 ---
 
 ## Troubleshooting
 
-### Common Mistakes
-
-**Wrong password reset endpoint:**
-- Incorrect: `/auth/forgot-password` (does not exist)
-- Correct: `/auth/password/reset-request`
-
-**Missing required fields:**
-- Registration requires `email` and `password`
-- `organization_name` is optional
-
-**Password requirements:**
-- Minimum 12 characters
-- At least one uppercase letter
-- At least one lowercase letter
-- At least one number
-- At least one special character
-
 ### "Invalid credentials" on login
-- Verify email and password are correct
-- Check if the account email is verified
-- Ensure password meets requirements
 
-### "Token expired" errors
+- For administrators: verify email and password are correct, check if email is verified
+- For users: ensure you're providing the correct `org` (organization name, not ID)
+
+### "Invalid token" errors
+
 - Access tokens expire after 15 minutes
-- Use the refresh token to get a new access token
-- Refresh tokens expire after 7 days - user must log in again
+- Use refresh tokens (admin/user) or client credentials (app) to get new tokens
+- Verify you're using the correct token type for the endpoint
 
-### "Rate limited" errors
-- Wait before retrying
-- Implement exponential backoff
-- Consider if you're making too many requests
+### "Token type mismatch"
 
-### MFA codes not working
-- Ensure the user's device time is synchronized (NTP)
-- Codes are valid for 30 seconds
-- Use a recovery code if they've lost access to their authenticator
+- `/admin/*` endpoints require admin JWT
+- `/admin/orgs/:org_name/*` endpoints require admin JWT with membership in that org
+- `/orgs/:org_name/users/*` endpoints accept both admin and app JWT
+- `/oauth/token` requires client credentials, not a JWT
 
-### JWKS caching
-- Cache JWKS responses (1 hour recommended)
-- Handle key rotation gracefully (try all keys in the set)
-- Refresh cache on signature verification failure
+### Application token not working
+
+- Verify client_id and client_secret are correct
+- Check that the application status is `active`
+- Ensure the application has the required scopes
+
+### User login fails
+
+- Users need `org` (name) + `username` + `password`
+- Username is unique per organization, not globally
+- Check user status is `active`
+
+### "Forbidden" on organization operations
+
+- Verify you're a member of the organization
+- Some operations (like delete) require owner role
+- Check if the organization exists and is active
