@@ -116,6 +116,52 @@ Production: https://auth.interactor.com/api/v1
 
 ---
 
+## Choosing an Authentication Method
+
+Before diving into implementation, choose the right authentication approach for your use case:
+
+### Decision Guide
+
+```
+Is this for end-user authentication?
+│
+├─ YES → Is this a web app, SPA, or mobile app?
+│        │
+│        ├─ YES → Use OAuth/OIDC (Recommended)
+│        │        • More secure (credentials never touch your servers)
+│        │        • Supports social login (Google, GitHub)
+│        │        • Account Server handles login UI
+│        │        • See: "OAuth 2.0 / OIDC User Authentication" section
+│        │
+│        └─ NO → Is this a trusted first-party backend?
+│                 │
+│                 ├─ YES → Direct API login is acceptable
+│                 │        • You control the entire auth flow
+│                 │        • See: "User Login" in User Management section
+│                 │
+│                 └─ NO → Use OAuth/OIDC
+│
+└─ NO → Is this backend-to-backend (M2M)?
+         │
+         └─ YES → Use OAuth 2.0 Client Credentials
+                  • See: "Get an Application Token" section
+```
+
+### Quick Comparison
+
+| Scenario | Recommended Method | Why |
+|----------|-------------------|-----|
+| Web application | **OAuth/OIDC** | User credentials never touch your servers |
+| Single-page app (SPA) | **OAuth/OIDC** | Secure token exchange, no secrets in browser |
+| Mobile app | **OAuth/OIDC** | System browser for secure auth, supports biometrics |
+| Backend service calling APIs | **Client Credentials** | M2M authentication with rotating secrets |
+| Trusted first-party backend | Direct API (acceptable) | You control the full stack and login UI |
+| Third-party integrations | **OAuth/OIDC** | Never handle credentials for external apps |
+
+> **Security Note**: When in doubt, choose OAuth/OIDC. It's the industry standard for user authentication and keeps sensitive credentials out of your application code.
+
+---
+
 ## Architecture
 
 ```
@@ -323,6 +369,8 @@ curl -X POST https://auth.interactor.com/api/v1/orgs/your-company/users \
 ```
 
 ### User Login
+
+> **Security Consideration**: Direct API login means your application handles user credentials directly. This is appropriate for **trusted first-party backends** where you control the entire authentication flow. For web apps, SPAs, and mobile apps, consider using **OAuth/OIDC** instead (see "OAuth 2.0 / OIDC User Authentication" section below) — it's more secure because user credentials never touch your servers.
 
 Users authenticate with org name + username + password:
 
@@ -681,12 +729,24 @@ All public IDs use prefixes for easy identification:
 
 ---
 
-## OAuth 2.0 / OIDC User Authentication
+## OAuth 2.0 / OIDC User Authentication (Recommended for User-Facing Apps)
+
+> **Recommended**: This is the preferred method for authenticating users in web applications, SPAs, and mobile apps. User credentials are handled entirely by Account Server, never touching your application servers.
 
 Account Server can act as an **Identity Provider (IdP)** for your applications, similar to Auth0 or Okta. This enables your users to authenticate through a hosted login page with support for:
 
 - Username/password login
 - Social login (Google, GitHub)
+
+### Why OAuth/OIDC is More Secure
+
+| Security Benefit | Description |
+|-----------------|-------------|
+| **Credentials isolation** | User passwords never pass through your servers |
+| **Token-based auth** | Short-lived tokens reduce exposure window |
+| **Centralized security** | Account Server handles rate limiting, brute-force protection |
+| **Social login** | Delegate authentication to trusted providers (Google, GitHub) |
+| **PKCE support** | Protection against authorization code interception |
 
 ### When to Use OAuth/OIDC vs Direct API Login
 

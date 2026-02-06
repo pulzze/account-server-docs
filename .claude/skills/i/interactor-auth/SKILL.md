@@ -1,6 +1,6 @@
 ---
 name: interactor-auth
-version: 1.1.0
+version: 1.2.0
 description: Setup Interactor platform authentication with OAuth client credentials. Use when integrating with Interactor for credential management, AI agents, or workflows. Covers account registration, OAuth client creation, token management, and secret rotation.
 author: Interactor Integration Guide
 requires:
@@ -13,6 +13,7 @@ requires:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2.0 | 2026-02-06 | Added: User authentication guidance section distinguishing OAuth/OIDC from Direct API login. |
 | 1.1.0 | 2026-01-21 | Added: Token revocation, distributed caching, webhook verification, observability, SRE runbook, FAQ. Fixed: Issuer consistency, rate limit scope. |
 | 1.0.0 | 2026-01-20 | Initial release |
 
@@ -35,6 +36,18 @@ Configure authentication for the Interactor platform to enable credential manage
 - **End-User Authentication**: Interactor doesn't manage your end users. Use your own auth system for that.
 - **Already Integrated**: If your backend already has working Interactor authentication, use the specific skill for your task (credentials, agents, workflows, etc.).
 - **Testing Only**: For quick API exploration, use the Interactor dashboard instead of setting up full OAuth.
+
+## User Authentication vs Backend Authentication
+
+This skill covers **backend-to-Interactor authentication** (M2M). If you're implementing **end-user authentication** for a solution app, see the Account Server Integration Guide for the right approach:
+
+| Your Scenario | Recommended Method | Reference |
+|--------------|-------------------|-----------|
+| Web app, SPA, or mobile app | **OAuth/OIDC** (Recommended) | Integration Guide: "OAuth 2.0 / OIDC User Authentication" |
+| Trusted first-party backend | Direct API login (acceptable) | Integration Guide: "User Login" |
+| Backend calling Interactor APIs | Client Credentials (this skill) | Continue below |
+
+> **Security Note**: For user-facing applications, **always prefer OAuth/OIDC**. It keeps user credentials off your servers and provides social login, SSO, and centralized security controls. Direct API login should only be used when you fully control the authentication flow in a trusted backend environment.
 
 ## Prerequisites
 
