@@ -2,268 +2,673 @@
 
 ## Building Admin Interfaces with Account Server Authentication
 
-**Version:** 1.0.0
-**Last Updated:** 2026-01-23
+**Version:** 2.0.0
+**Last Updated:** 2026-02-11
 
 ---
 
 ## Overview
 
-This guide explains how to build an admin interface for your application that uses Account Server for administrator authentication. This pattern allows you to:
+This guide explains how to build an admin interface for your application that uses Account Server for administrator authentication. Account Server supports two approaches:
 
-1. **Delegate identity management** - Account Server handles admin accounts, passwords, and MFA
-2. **Maintain independent sessions** - Your app controls session lifetime and behavior
-3. **Enforce application permissions** - Only admins with access to your registered app can log in
+| Approach | Recommended For | Description |
+|----------|-----------------|-------------|
+| **SSO Redirect** (Recommended) | Browser-based admin UIs | Redirect to Account Server login page |
+| **API-Based** | CLI tools, automation, testing | Forward credentials via API |
+
+**We strongly recommend the SSO redirect approach for all admin UIs.** Benefits include:
+
+1. **Single login UI** - No need to build login/MFA forms in your app
+2. **Credentials stay secure** - Passwords only entered on Account Server
+3. **Automatic MFA handling** - Account Server manages the entire MFA flow
+4. **Consistent experience** - Admins see familiar login across all services
+5. **Less code to maintain** - Your app only handles the OAuth callback
+
+---
+
+## SSO Redirect Approach (Recommended)
 
 ### Architecture
 
 ```
-┌─────────────────────┐
-│  Your Admin UI      │
-│  (Browser)          │
-└──────────┬──────────┘
-           │
-           │ 1. Admin enters email/password
-           ▼
-┌─────────────────────┐
-│  Your App Backend   │
-│                     │
-│  - Receives creds   │
-│  - Calls Account    │
-│    Server API       │
-│  - Verifies app     │
-│    permission       │
-│  - Creates local    │
-│    session          │
-└──────────┬──────────┘
-           │
-           │ 2. Authenticate admin
-           ▼
-┌─────────────────────┐
-│  Account Server     │
-│                     │
-│  - Validates creds  │
-│  - Handles MFA      │
-│  - Returns JWT      │
-│  - Provides app     │
-│    permission check │
-└─────────────────────┘
+Admin Browser              Your App              Account Server
+     │                        │                        │
+     ├─ Visit /admin/login ──>│                        │
+     │                        │                        │
+     │                        ├── Redirect ───────────>│
+     │                        │   /oauth/admin/authorize│
+     │                        │   ?client_id=...       │
+     │                        │   &redirect_uri=...    │
+     │                        │   &code_challenge=...  │
+     │                        │                        │
+     │<───────────────────────┼────────────────────────│
+     │                        │                        │
+     │  [Enter credentials on Account Server]          │
+     │  [Complete MFA if enabled]                      │
+     │                        │                        │
+     │────────────────────────┼───────────────────────>│
+     │                        │                        │
+     │                        │<── Redirect ───────────│
+     │<───────────────────────│   /admin/callback      │
+     │                        │   ?code=xxx&state=yyy  │
+     │                        │                        │
+     │                        ├── POST /oauth/admin/token ─>│
+     │                        │   {code, code_verifier}│
+     │                        │                        │
+     │                        │<── {access_token} ─────│
+     │                        │                        │
+     │                    [Create local session]       │
+     │                        │                        │
+     │<── Set session cookie ─│                        │
+     │    Redirect to /admin  │                        │
 ```
 
----
+### Prerequisites
 
-## Prerequisites
+1. **Register your application** in Account Server
+2. **Enable admin OAuth** for your application
+3. **Configure admin redirect URIs** whitelist
+4. Get your `client_id` and `client_secret`
 
-Before integrating, you need:
+### Application Setup
 
-1. **A registered application** in Account Server with a `client_id`
-2. **Administrator accounts** created in Account Server with the `admin` role
-3. **Application permissions** granted to admin accounts (via organization membership)
+Contact your organization admin to configure your application:
 
-### Registering Your Application
+```bash
+# Required settings on Account Server
+admin_oauth_enabled: true
+admin_redirect_uris: [
+  "https://your-app.com/admin/callback",
+  "http://localhost:4000/admin/callback"  # Development
+]
+```
 
-Contact your organization admin to register your application in Account Server. You'll receive:
-- `client_id` - Your application's unique identifier (UUID format)
-- This is used to verify that admins have permission to access your specific application
+### Environment Variables
 
----
+```bash
+# Account Server URL
+ACCOUNT_SERVER_URL=https://auth.interactor.com
 
-## Authentication Flow
+# Your registered application credentials
+ADMIN_CLIENT_ID=app_xxxxx
+ADMIN_CLIENT_SECRET=sec_xxxxx
 
-### Step 1: Admin Login Request
+# Callback URL (must be in admin_redirect_uris whitelist)
+ADMIN_CALLBACK_URL=https://your-app.com/admin/callback
+```
 
-Your admin UI collects credentials and sends them to your backend:
+### Implementation
+
+#### 1. Login Route - Redirect to Account Server
+
+When an admin visits `/admin/login`, redirect them to Account Server:
 
 ```javascript
-// Frontend: POST to your backend
-const response = await fetch('/admin/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    email: 'admin@example.com',
-    password: 'password123'
-  })
-});
-```
-
-### Step 2: Backend Authenticates with Account Server
-
-Your backend calls the Account Server admin login endpoint:
-
-```javascript
-// Backend: Call Account Server
-const authResponse = await fetch('https://auth.interactor.com/api/v1/admin/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    email: credentials.email,
-    password: credentials.password
-  })
-});
-
-const result = await authResponse.json();
-```
-
-### Step 3: Handle MFA (if enabled)
-
-If the admin has MFA enabled, Account Server returns:
-
-```json
-{
-  "mfa_required": true,
-  "session_token": "temp-session-token-for-mfa"
-}
-```
-
-Your app should:
-1. Store the `session_token` temporarily
-2. Prompt the admin for their TOTP code
-3. Complete authentication with the MFA endpoint:
-
-```javascript
-// Complete MFA verification
-const mfaResponse = await fetch('https://auth.interactor.com/api/v1/admin/login/mfa', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    session_token: storedSessionToken,
-    code: totpCode
-  })
-});
-```
-
-### Step 4: Verify Application Permission
-
-After successful authentication, verify the admin has access to your application:
-
-```javascript
-// Get admin's organizations
-const orgsResponse = await fetch('https://auth.interactor.com/api/v1/admin/orgs', {
-  headers: { 'Authorization': `Bearer ${accessToken}` }
-});
-const { organizations } = await orgsResponse.json();
-
-// Check each org for your app permission
-let hasPermission = false;
-for (const org of organizations) {
-  const appResponse = await fetch(
-    `https://auth.interactor.com/api/v1/admin/orgs/${org.name}/applications/${YOUR_APP_CLIENT_ID}`,
-    { headers: { 'Authorization': `Bearer ${accessToken}` } }
-  );
-
-  if (appResponse.ok) {
-    hasPermission = true;
-    break;
+// GET /admin/login
+app.get('/admin/login', (req, res) => {
+  // If already logged in, redirect to dashboard
+  if (req.session.admin) {
+    return res.redirect('/admin');
   }
-}
 
-if (!hasPermission) {
-  throw new Error('Admin does not have permission to access this application');
-}
+  // Generate PKCE challenge
+  const codeVerifier = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto
+    .createHash('sha256')
+    .update(codeVerifier)
+    .digest('base64url');
+
+  // Generate state for CSRF protection
+  const state = crypto.randomBytes(32).toString('base64url');
+
+  // Store in session for callback validation
+  req.session.oauth = { codeVerifier, state };
+
+  // Build authorization URL
+  const params = new URLSearchParams({
+    client_id: process.env.ADMIN_CLIENT_ID,
+    redirect_uri: process.env.ADMIN_CALLBACK_URL,
+    response_type: 'code',
+    state: state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256'
+  });
+
+  res.redirect(`${process.env.ACCOUNT_SERVER_URL}/oauth/admin/authorize?${params}`);
+});
 ```
 
-### Step 5: Create Local Session
+#### 2. Callback Route - Exchange Code for Token
 
-Once authenticated and authorized, create a session in your application:
+Handle the OAuth callback from Account Server:
 
 ```javascript
-// Generate a secure session token
-const sessionToken = crypto.randomBytes(32).toString('base64url');
+// GET /admin/callback
+app.get('/admin/callback', async (req, res) => {
+  const { code, state, error, error_description } = req.query;
 
-// Store hashed token in your database
-const tokenHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
+  // Handle errors from Account Server
+  if (error) {
+    console.error(`OAuth error: ${error} - ${error_description}`);
+    return res.redirect('/admin/login?error=auth_failed');
+  }
 
-await db.adminSessions.create({
-  tokenHash: tokenHash,
-  adminId: jwtPayload.sub,
-  adminEmail: jwtPayload.email,
-  adminName: jwtPayload.name,
-  expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-  ipAddress: request.ip,
-  userAgent: request.headers['user-agent']
+  // Validate state (CSRF protection)
+  if (state !== req.session.oauth?.state) {
+    return res.redirect('/admin/login?error=invalid_state');
+  }
+
+  const codeVerifier = req.session.oauth.codeVerifier;
+  delete req.session.oauth;
+
+  try {
+    // Exchange code for token
+    const tokenResponse = await fetch(
+      `${process.env.ACCOUNT_SERVER_URL}/oauth/admin/token`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code: code,
+          redirect_uri: process.env.ADMIN_CALLBACK_URL,
+          client_id: process.env.ADMIN_CLIENT_ID,
+          client_secret: process.env.ADMIN_CLIENT_SECRET,
+          code_verifier: codeVerifier
+        })
+      }
+    );
+
+    if (!tokenResponse.ok) {
+      console.error('Token exchange failed:', await tokenResponse.text());
+      return res.redirect('/admin/login?error=token_failed');
+    }
+
+    const { access_token } = await tokenResponse.json();
+
+    // Extract admin info from JWT (without verification - AS already verified)
+    const adminInfo = jwt.decode(access_token);
+
+    // Create local session
+    const sessionToken = await createAdminSession({
+      adminId: adminInfo.sub,
+      email: adminInfo.email,
+      name: adminInfo.name,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Set session cookie
+    res.cookie('admin_session', sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    });
+
+    res.redirect('/admin');
+
+  } catch (error) {
+    console.error('Callback error:', error);
+    res.redirect('/admin/login?error=internal');
+  }
 });
-
-// Return session token to client (via secure cookie or response)
 ```
 
----
+#### 3. Logout Route
 
-## Complete Authentication Flow Diagram
+Logout is handled locally (no redirect needed):
 
-```
-Admin              Your App              Account Server
-  │                  │                        │
-  ├─ Enter email ───>│                        │
-  │   password       │                        │
-  │                  │                        │
-  │                  ├─ POST /api/v1/admin/login ─────────────>│
-  │                  │ {email, password}                       │
-  │                  │                                         │
-  │                  │                    [Validate credentials]
-  │                  │                                         │
-  │                  │<── {access_token} or {mfa_required} ────│
-  │                  │                                         │
-  │  [If MFA required]                                         │
-  │<── Show MFA form │                                         │
-  │                  │                                         │
-  ├─ Enter TOTP ────>│                                         │
-  │                  │                                         │
-  │                  ├─ POST /api/v1/admin/login/mfa ─────────>│
-  │                  │ {session_token, code}                   │
-  │                  │                                         │
-  │                  │<── {access_token} ──────────────────────│
-  │                  │                                         │
-  │                  ├─ GET /api/v1/admin/orgs ────────────────>│
-  │                  │ Authorization: Bearer token             │
-  │                  │                                         │
-  │                  │<── {organizations: [...]} ──────────────│
-  │                  │                                         │
-  │                  ├─ GET /api/v1/admin/orgs/{org}/          │
-  │                  │     applications/{app_client_id} ──────>│
-  │                  │                                         │
-  │                  │<── {200 OK} or {404} ───────────────────│
-  │                  │                                         │
-  │              [Create local session]                        │
-  │                  │                                         │
-  │<── Set session ──│                                         │
-  │    cookie        │                                         │
+```javascript
+// DELETE /admin/logout or POST /admin/logout
+app.post('/admin/logout', async (req, res) => {
+  const token = req.cookies.admin_session;
+
+  if (token) {
+    await deleteAdminSession(token);
+  }
+
+  res.clearCookie('admin_session');
+  res.redirect('/admin/login');
+});
 ```
 
----
+### JWT Token Structure
 
-## JWT Token Structure
-
-Account Server issues JWTs with these claims for admin authentication:
+Account Server issues admin SSO tokens with these claims:
 
 ```json
 {
-  "sub": "admin-uuid",
+  "sub": "adm_xxxxx",
   "email": "admin@example.com",
   "name": "Admin Name",
-  "org": "organization-name",
-  "role": "admin",
-  "type": "user",
+  "type": "admin",
+  "client_id": "app_xxxxx",
   "iss": "https://auth.interactor.com",
-  "aud": ["interactor", "knowledge-base"],
+  "aud": ["app_xxxxx"],
   "exp": 1234567890,
   "iat": 1234567800
 }
 ```
 
-**Key claims for admin verification:**
-- `role: "admin"` - Confirms admin role
-- `sub` - Unique admin identifier (use this for your local records)
-- `org` - Admin's primary organization
+### Complete Example (Node.js/Express)
+
+```javascript
+const express = require('express');
+const session = require('express-session');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+
+const app = express();
+
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false
+}));
+
+// Login - redirect to Account Server
+app.get('/admin/login', (req, res) => {
+  if (req.session.admin) {
+    return res.redirect('/admin');
+  }
+
+  const codeVerifier = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+  const state = crypto.randomBytes(32).toString('base64url');
+
+  req.session.oauth = { codeVerifier, state };
+
+  const params = new URLSearchParams({
+    client_id: process.env.ADMIN_CLIENT_ID,
+    redirect_uri: process.env.ADMIN_CALLBACK_URL,
+    response_type: 'code',
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256'
+  });
+
+  res.redirect(`${process.env.ACCOUNT_SERVER_URL}/oauth/admin/authorize?${params}`);
+});
+
+// OAuth callback
+app.get('/admin/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error || state !== req.session.oauth?.state) {
+    return res.redirect('/admin/login?error=auth_failed');
+  }
+
+  try {
+    const tokenResponse = await fetch(`${process.env.ACCOUNT_SERVER_URL}/oauth/admin/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: process.env.ADMIN_CALLBACK_URL,
+        client_id: process.env.ADMIN_CLIENT_ID,
+        client_secret: process.env.ADMIN_CLIENT_SECRET,
+        code_verifier: req.session.oauth.codeVerifier
+      })
+    });
+
+    delete req.session.oauth;
+
+    if (!tokenResponse.ok) {
+      return res.redirect('/admin/login?error=token_failed');
+    }
+
+    const { access_token } = await tokenResponse.json();
+    const adminInfo = jwt.decode(access_token);
+
+    // Create local session (implement based on your database)
+    const sessionToken = await createAdminSession(adminInfo, req);
+
+    res.cookie('admin_session', sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 24 * 60 * 60 * 1000
+    });
+
+    res.redirect('/admin');
+  } catch (err) {
+    res.redirect('/admin/login?error=internal');
+  }
+});
+
+// Logout
+app.post('/admin/logout', async (req, res) => {
+  if (req.cookies.admin_session) {
+    await deleteAdminSession(req.cookies.admin_session);
+  }
+  res.clearCookie('admin_session');
+  res.redirect('/admin/login');
+});
+
+// Protected admin routes
+app.use('/admin', requireAdmin, adminRouter);
+```
+
+### Complete Example (Elixir/Phoenix)
+
+```elixir
+# lib/my_app_web/controllers/admin_auth_controller.ex
+defmodule MyAppWeb.AdminAuthController do
+  use MyAppWeb, :controller
+
+  alias MyApp.Auth.AdminOAuthClient
+  alias MyApp.AdminSession
+  alias MyAppWeb.Plugs.AdminSessionAuth
+
+  def redirect_to_sso(conn, _params) do
+    # If already logged in, redirect to dashboard
+    if conn.assigns[:current_admin] do
+      redirect(conn, to: ~p"/admin")
+    else
+      state = generate_state()
+      {code_verifier, code_challenge} = generate_pkce()
+
+      conn =
+        conn
+        |> put_session(:oauth_state, state)
+        |> put_session(:oauth_code_verifier, code_verifier)
+
+      authorize_url = AdminOAuthClient.build_authorize_url(
+        state: state,
+        code_challenge: code_challenge
+      )
+
+      redirect(conn, external: authorize_url)
+    end
+  end
+
+  def callback(conn, %{"code" => code, "state" => state}) do
+    stored_state = get_session(conn, :oauth_state)
+    code_verifier = get_session(conn, :oauth_code_verifier)
+
+    if state != stored_state do
+      conn
+      |> clear_oauth_session()
+      |> put_flash(:error, "Invalid state")
+      |> redirect(to: ~p"/admin/login")
+    else
+      case AdminOAuthClient.exchange_code(code, code_verifier) do
+        {:ok, admin_info} ->
+          create_session_and_redirect(conn, admin_info)
+        {:error, _} ->
+          conn
+          |> clear_oauth_session()
+          |> put_flash(:error, "Authentication failed")
+          |> redirect(to: ~p"/admin/login")
+      end
+    end
+  end
+
+  def callback(conn, %{"error" => _error}) do
+    conn
+    |> clear_oauth_session()
+    |> put_flash(:error, "Authentication failed")
+    |> redirect(to: ~p"/admin/login")
+  end
+
+  defp create_session_and_redirect(conn, admin_info) do
+    case AdminSession.create_session(admin_info) do
+      {:ok, token, session} ->
+        admin = %{
+          id: session.id,
+          admin_id: admin_info.admin_id,
+          email: admin_info.email,
+          name: admin_info[:name]
+        }
+
+        conn
+        |> clear_oauth_session()
+        |> AdminSessionAuth.log_in_admin(admin, token)
+        |> redirect(to: ~p"/admin")
+      {:error, _} ->
+        conn
+        |> clear_oauth_session()
+        |> put_flash(:error, "Session creation failed")
+        |> redirect(to: ~p"/admin/login")
+    end
+  end
+
+  defp clear_oauth_session(conn) do
+    conn
+    |> delete_session(:oauth_state)
+    |> delete_session(:oauth_code_verifier)
+  end
+
+  defp generate_state do
+    :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+  end
+
+  defp generate_pkce do
+    verifier = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+    challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+    {verifier, challenge}
+  end
+end
+```
+
+```elixir
+# lib/my_app/auth/admin_oauth_client.ex
+defmodule MyApp.Auth.AdminOAuthClient do
+  alias MyApp.Auth.JWT
+
+  def build_authorize_url(opts) do
+    base_url = account_server_url()
+    client_id = admin_client_id()
+    redirect_uri = admin_callback_url()
+
+    query = URI.encode_query(%{
+      client_id: client_id,
+      redirect_uri: redirect_uri,
+      response_type: "code",
+      state: opts[:state],
+      code_challenge: opts[:code_challenge],
+      code_challenge_method: "S256"
+    })
+
+    "#{base_url}/oauth/admin/authorize?#{query}"
+  end
+
+  def exchange_code(code, code_verifier) do
+    url = "#{account_server_url()}/oauth/admin/token"
+
+    body = %{
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: admin_callback_url(),
+      client_id: admin_client_id(),
+      client_secret: admin_client_secret(),
+      code_verifier: code_verifier
+    }
+
+    case Req.post(url, json: body) do
+      {:ok, %{status: 200, body: %{"access_token" => token}}} ->
+        extract_admin_info(token)
+      _ ->
+        {:error, :token_exchange_failed}
+    end
+  end
+
+  defp extract_admin_info(token) do
+    case JWT.peek_claims(token) do
+      {:ok, claims} ->
+        {:ok, %{
+          admin_id: claims["sub"],
+          email: claims["email"],
+          name: claims["name"],
+          access_token: token
+        }}
+      {:error, reason} ->
+        {:error, {:invalid_token, reason}}
+    end
+  end
+
+  defp account_server_url do
+    Application.get_env(:my_app, :admin_auth)[:account_server_url] ||
+      System.get_env("ACCOUNT_SERVER_URL")
+  end
+
+  defp admin_client_id do
+    Application.get_env(:my_app, :admin_auth)[:client_id] ||
+      System.get_env("ADMIN_CLIENT_ID")
+  end
+
+  defp admin_client_secret do
+    Application.get_env(:my_app, :admin_auth)[:client_secret] ||
+      System.get_env("ADMIN_CLIENT_SECRET")
+  end
+
+  defp admin_callback_url do
+    Application.get_env(:my_app, :admin_auth)[:callback_url] ||
+      System.get_env("ADMIN_CALLBACK_URL")
+  end
+end
+```
+
+```elixir
+# Router
+scope "/admin", MyAppWeb do
+  pipe_through [:browser, :admin_session]
+
+  get "/login", AdminAuthController, :redirect_to_sso
+  get "/callback", AdminAuthController, :callback
+  delete "/logout", AdminSessionController, :delete
+end
+```
 
 ---
 
-## API Reference
+## API Reference - Admin OAuth Endpoints
 
-### POST /api/v1/admin/login
+### GET /oauth/admin/authorize
 
-Authenticate an administrator.
+Initiates admin OAuth flow. Redirects to login UI.
 
-**Request:**
+**Query Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `client_id` | Yes | Your application's client ID |
+| `redirect_uri` | Yes | Callback URL (must be whitelisted) |
+| `response_type` | Yes | Must be `code` |
+| `state` | Recommended | CSRF protection token |
+| `code_challenge` | Recommended | PKCE challenge (Base64-URL encoded) |
+| `code_challenge_method` | With PKCE | `S256` (recommended) or `plain` |
+
+**Example:**
+```
+GET /oauth/admin/authorize
+  ?client_id=app_xxxxx
+  &redirect_uri=https://your-app.com/admin/callback
+  &response_type=code
+  &state=random-csrf-token
+  &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM
+  &code_challenge_method=S256
+```
+
+**Success Response:**
+Redirects to login page, then back to `redirect_uri?code=xxx&state=yyy`
+
+**Error Response:**
+Redirects to `redirect_uri?error=xxx&error_description=yyy`
+
+### POST /oauth/admin/token
+
+Exchanges authorization code for access token.
+
+**Request Body:**
+
+```json
+{
+  "grant_type": "authorization_code",
+  "code": "auth-code-from-callback",
+  "redirect_uri": "https://your-app.com/admin/callback",
+  "client_id": "app_xxxxx",
+  "client_secret": "sec_xxxxx",
+  "code_verifier": "pkce-verifier-string"
+}
+```
+
+**Success Response (200):**
+
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+```
+
+**Error Responses:**
+
+- `400` - Invalid request (missing parameters)
+- `401` - Invalid client credentials
+- `401` - Invalid or expired authorization code
+- `401` - PKCE verification failed
+
+---
+
+## Security Considerations
+
+### PKCE is Required
+
+Always use PKCE with S256 for authorization code flow:
+
+```javascript
+// Generate PKCE values
+const codeVerifier = crypto.randomBytes(32).toString('base64url');
+const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+```
+
+### State Parameter
+
+Always use the state parameter to prevent CSRF attacks:
+
+```javascript
+const state = crypto.randomBytes(32).toString('base64url');
+req.session.oauthState = state;
+
+// In callback:
+if (req.query.state !== req.session.oauthState) {
+  return res.status(400).send('Invalid state');
+}
+```
+
+### Redirect URI Whitelisting
+
+Only whitelisted redirect URIs are accepted. Always register both:
+- Production URL: `https://your-app.com/admin/callback`
+- Development URL: `http://localhost:PORT/admin/callback`
+
+### Token Lifetime
+
+- Authorization codes expire in **5 minutes** and are single-use
+- Access tokens are for one-time admin info extraction (not for API calls)
+- Your app should create its own session after receiving the token
+
+---
+
+## Alternative: API-Based Authentication
+
+For CLI tools, automated testing, or scenarios where redirect-based flow isn't suitable, you can use API-based authentication. **This approach requires handling credentials in your code.**
+
+### When to Use API-Based Approach
+
+- Command-line admin tools
+- Automated testing
+- Service-to-service authentication
+- Scripts that need admin access
+
+### API Endpoints
+
+#### POST /api/v1/admin/login
+
 ```json
 {
   "email": "admin@example.com",
@@ -271,7 +676,7 @@ Authenticate an administrator.
 }
 ```
 
-**Success Response (200):**
+**Success (200):**
 ```json
 {
   "access_token": "eyJ...",
@@ -280,627 +685,188 @@ Authenticate an administrator.
 }
 ```
 
-**MFA Required Response (200):**
+**MFA Required (200):**
 ```json
 {
   "mfa_required": true,
-  "session_token": "temp-token-uuid"
+  "session_token": "temp-token"
 }
 ```
 
-**Error Responses:**
-- `401` - Invalid credentials
-- `403` - Account inactive (email not verified)
+#### POST /api/v1/admin/login/mfa
 
----
-
-### POST /api/v1/admin/login/mfa
-
-Complete MFA verification.
-
-**Request:**
 ```json
 {
-  "session_token": "temp-token-uuid",
+  "session_token": "temp-token",
   "code": "123456"
 }
 ```
 
-**Success Response (200):**
-```json
-{
-  "access_token": "eyJ...",
-  "refresh_token": "eyJ...",
-  "expires_in": 900
+### Application Permission Verification
+
+With API-based auth, you must manually verify the admin has access to your application:
+
+```javascript
+// Get admin's organizations
+const orgsResponse = await fetch(`${ACCOUNT_SERVER_URL}/api/v1/admin/orgs`, {
+  headers: { 'Authorization': `Bearer ${accessToken}` }
+});
+
+// Check if admin's org owns your app
+for (const org of organizations) {
+  const appResponse = await fetch(
+    `${ACCOUNT_SERVER_URL}/api/v1/admin/orgs/${org.name}/applications/${YOUR_APP_CLIENT_ID}`,
+    { headers: { 'Authorization': `Bearer ${accessToken}` } }
+  );
+  if (appResponse.ok) {
+    // Admin has permission
+  }
 }
 ```
 
-**Error Responses:**
-- `401` - Invalid MFA code
-- `401` - Session token expired
+**Note:** With SSO redirect approach, Account Server automatically verifies the admin has permission to access your application before issuing the authorization code.
 
 ---
 
-### GET /api/v1/admin/orgs
+## Session Management
 
-List organizations the admin belongs to.
+### Session Token Storage
 
-**Headers:**
-```
-Authorization: Bearer <access_token>
-```
-
-**Response (200):**
-```json
-{
-  "organizations": [
-    {
-      "name": "my-org",
-      "display_name": "My Organization",
-      "role": "admin"
-    }
-  ]
-}
-```
-
----
-
-### GET /api/v1/admin/orgs/{org_name}/applications/{client_id}
-
-Check if an application is registered under an organization.
-
-**Headers:**
-```
-Authorization: Bearer <access_token>
-```
-
-**Response (200):** Application exists and admin has access
-**Response (404):** Application not found or no access
-
----
-
-## Configuration
-
-### Environment Variables
-
-Your application needs these configuration values:
-
-```bash
-# Account Server base URL
-ACCOUNT_SERVER_URL=https://auth.interactor.com
-
-# Your registered application's client ID
-# Used to verify admin has permission to access your app
-YOUR_APP_CLIENT_ID=your-app-uuid-here
-
-# Session settings
-ADMIN_SESSION_TTL=86400  # 24 hours in seconds
-```
-
-### Development Mode
-
-For local development, you may want to skip authentication:
-
-```bash
-# WARNING: Only use in development!
-ADMIN_AUTH_SKIP=true
-```
-
-When `ADMIN_AUTH_SKIP=true`, your app should allow any admin access without calling Account Server.
-
----
-
-## Session Management Best Practices
-
-### Token Storage
-
-Never store raw session tokens in your database:
+Never store raw session tokens:
 
 ```javascript
 // Good: Store hash
 const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-await db.sessions.create({ tokenHash, ... });
+await db.adminSessions.create({ tokenHash, adminId, ... });
 
 // Bad: Store raw token
-await db.sessions.create({ token: token, ... });  // DON'T DO THIS
+await db.adminSessions.create({ token: rawToken, ... }); // DON'T
 ```
 
-### Session Validation
-
-On each request, validate the session:
+### Session Validation Middleware
 
 ```javascript
-async function validateAdminSession(token) {
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-
-  const session = await db.adminSessions.findOne({
-    where: { tokenHash }
-  });
-
-  if (!session) {
-    return null; // Invalid token
-  }
-
-  if (session.expiresAt < new Date()) {
-    await session.destroy(); // Clean up expired session
-    return null;
-  }
-
-  return {
-    adminId: session.adminId,
-    email: session.adminEmail,
-    name: session.adminName
-  };
-}
-```
-
-### Session Cleanup
-
-Implement automatic cleanup of expired sessions:
-
-```javascript
-// Run periodically (e.g., daily cron job)
-async function cleanupExpiredSessions() {
-  await db.adminSessions.destroy({
-    where: {
-      expiresAt: { [Op.lt]: new Date() }
-    }
-  });
-}
-```
-
-### Logout
-
-When an admin logs out, delete their session:
-
-```javascript
-async function logout(token) {
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  await db.adminSessions.destroy({ where: { tokenHash } });
-}
-```
-
-### Force Logout All Sessions
-
-To logout an admin from all devices:
-
-```javascript
-async function logoutAllSessions(adminId) {
-  await db.adminSessions.destroy({
-    where: { adminId }
-  });
-}
-```
-
----
-
-## Error Handling
-
-### Common Scenarios
-
-| Error | Cause | User Message |
-|-------|-------|--------------|
-| `invalid_credentials` | Wrong email/password | "Invalid email or password" |
-| `account_inactive` | Email not verified | "Please verify your email first" |
-| `mfa_required` | MFA enabled | Show MFA input form |
-| `invalid_mfa_code` | Wrong TOTP code | "Invalid verification code" |
-| `no_permission` | Admin lacks app access | "You don't have access to this application" |
-| `session_expired` | Token or session expired | Redirect to login |
-
-### Implementation Example
-
-```javascript
-async function handleLogin(email, password) {
-  try {
-    const result = await authenticateAdmin(email, password);
-
-    if (result.mfaRequired) {
-      return { type: 'mfa_required', sessionToken: result.sessionToken };
-    }
-
-    // Check app permission
-    const hasPermission = await verifyAppPermission(result.accessToken);
-    if (!hasPermission) {
-      return { type: 'error', message: "You don't have access to this application" };
-    }
-
-    // Create session
-    const session = await createAdminSession(result);
-    return { type: 'success', session };
-
-  } catch (error) {
-    switch (error.code) {
-      case 'INVALID_CREDENTIALS':
-        return { type: 'error', message: 'Invalid email or password' };
-      case 'ACCOUNT_INACTIVE':
-        return { type: 'error', message: 'Please verify your email first' };
-      default:
-        return { type: 'error', message: 'Login failed. Please try again.' };
-    }
-  }
-}
-```
-
----
-
-## Security Considerations
-
-### 1. Always Verify App Permission
-
-Don't skip the permission check. Without it, any Account Server admin could access your app:
-
-```javascript
-// REQUIRED: Always check permission
-const hasPermission = await verifyAppPermission(accessToken);
-if (!hasPermission) {
-  throw new ForbiddenError();
-}
-```
-
-### 2. Use Secure Session Cookies
-
-Set appropriate cookie flags:
-
-```javascript
-res.cookie('admin_session', sessionToken, {
-  httpOnly: true,      // Prevents JavaScript access
-  secure: true,        // HTTPS only
-  sameSite: 'strict',  // CSRF protection
-  maxAge: 24 * 60 * 60 * 1000  // 24 hours
-});
-```
-
-### 3. Log Security Events
-
-Track admin access for audit purposes:
-
-```javascript
-await auditLog.create({
-  event: 'admin_login',
-  adminId: admin.id,
-  adminEmail: admin.email,
-  ipAddress: request.ip,
-  userAgent: request.headers['user-agent'],
-  timestamp: new Date()
-});
-```
-
-### 4. Rate Limit Login Attempts
-
-Protect against brute force attacks:
-
-```javascript
-const rateLimit = require('express-rate-limit');
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts per window
-  message: 'Too many login attempts. Please try again later.'
-});
-
-app.post('/admin/login', loginLimiter, loginHandler);
-```
-
-### 5. Don't Cache Permissions
-
-Always verify permissions on login, not from cache. Organization membership can change:
-
-```javascript
-// Good: Check on every login
-const hasPermission = await verifyAppPermission(accessToken);
-
-// Bad: Use cached permission
-const cachedPermission = await cache.get(`admin:${adminId}:permission`);
-```
-
----
-
-## Complete Backend Example (Node.js/Express)
-
-```javascript
-const express = require('express');
-const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
-
-const app = express();
-app.use(express.json());
-
-const ACCOUNT_SERVER_URL = process.env.ACCOUNT_SERVER_URL;
-const YOUR_APP_CLIENT_ID = process.env.YOUR_APP_CLIENT_ID;
-
-// Login endpoint
-app.post('/admin/login', async (req, res) => {
-  const { email, password } = req.body;
-
-  try {
-    // Step 1: Authenticate with Account Server
-    const authResponse = await fetch(`${ACCOUNT_SERVER_URL}/api/v1/admin/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-
-    if (!authResponse.ok) {
-      const error = await authResponse.json();
-      return res.status(401).json({ error: error.error || 'Invalid credentials' });
-    }
-
-    const authResult = await authResponse.json();
-
-    // Step 2: Check for MFA
-    if (authResult.mfa_required) {
-      return res.json({
-        mfa_required: true,
-        session_token: authResult.session_token
-      });
-    }
-
-    // Step 3: Verify app permission
-    const hasPermission = await verifyAppPermission(authResult.access_token);
-    if (!hasPermission) {
-      return res.status(403).json({
-        error: 'You do not have permission to access this application'
-      });
-    }
-
-    // Step 4: Create local session
-    const session = await createSession(authResult.access_token, req);
-
-    // Step 5: Set session cookie and redirect
-    res.cookie('admin_session', session.token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 24 * 60 * 60 * 1000
-    });
-
-    res.json({ success: true, redirect: '/admin' });
-
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed' });
-  }
-});
-
-// MFA verification endpoint
-app.post('/admin/login/mfa', async (req, res) => {
-  const { session_token, code } = req.body;
-
-  try {
-    const mfaResponse = await fetch(`${ACCOUNT_SERVER_URL}/api/v1/admin/login/mfa`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_token, code })
-    });
-
-    if (!mfaResponse.ok) {
-      return res.status(401).json({ error: 'Invalid verification code' });
-    }
-
-    const authResult = await mfaResponse.json();
-
-    // Continue with permission check and session creation...
-    const hasPermission = await verifyAppPermission(authResult.access_token);
-    if (!hasPermission) {
-      return res.status(403).json({
-        error: 'You do not have permission to access this application'
-      });
-    }
-
-    const session = await createSession(authResult.access_token, req);
-
-    res.cookie('admin_session', session.token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 24 * 60 * 60 * 1000
-    });
-
-    res.json({ success: true, redirect: '/admin' });
-
-  } catch (error) {
-    console.error('MFA error:', error);
-    res.status(500).json({ error: 'Verification failed' });
-  }
-});
-
-// Logout endpoint
-app.post('/admin/logout', async (req, res) => {
+async function requireAdmin(req, res, next) {
   const token = req.cookies.admin_session;
-
-  if (token) {
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    await db.adminSessions.destroy({ where: { tokenHash } });
-  }
-
-  res.clearCookie('admin_session');
-  res.json({ success: true, redirect: '/admin/login' });
-});
-
-// Helper: Verify app permission
-async function verifyAppPermission(accessToken) {
-  // Skip check if no app client ID configured (development mode)
-  if (!YOUR_APP_CLIENT_ID) {
-    return true;
-  }
-
-  // Get admin's organizations
-  const orgsResponse = await fetch(`${ACCOUNT_SERVER_URL}/api/v1/admin/orgs`, {
-    headers: { 'Authorization': `Bearer ${accessToken}` }
-  });
-
-  if (!orgsResponse.ok) {
-    return false;
-  }
-
-  const { organizations } = await orgsResponse.json();
-
-  // Check each org for the app
-  for (const org of organizations) {
-    const appResponse = await fetch(
-      `${ACCOUNT_SERVER_URL}/api/v1/admin/orgs/${org.name}/applications/${YOUR_APP_CLIENT_ID}`,
-      { headers: { 'Authorization': `Bearer ${accessToken}` } }
-    );
-
-    if (appResponse.ok) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// Helper: Create local session
-async function createSession(accessToken, req) {
-  const decoded = jwt.decode(accessToken);
-
-  const token = crypto.randomBytes(32).toString('base64url');
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-
-  await db.adminSessions.create({
-    tokenHash,
-    adminId: decoded.sub,
-    adminEmail: decoded.email,
-    adminName: decoded.name,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-    ipAddress: req.ip,
-    userAgent: req.headers['user-agent']
-  });
-
-  return { token };
-}
-
-// Middleware: Require admin authentication
-function requireAdmin(req, res, next) {
-  const token = req.cookies.admin_session;
-
   if (!token) {
     return res.redirect('/admin/login');
   }
 
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const session = await db.adminSessions.findOne({ where: { tokenHash } });
 
-  db.adminSessions.findOne({ where: { tokenHash } })
-    .then(session => {
-      if (!session || session.expiresAt < new Date()) {
-        res.clearCookie('admin_session');
-        return res.redirect('/admin/login');
-      }
+  if (!session || session.expiresAt < new Date()) {
+    res.clearCookie('admin_session');
+    return res.redirect('/admin/login');
+  }
 
-      req.admin = {
-        id: session.adminId,
-        email: session.adminEmail,
-        name: session.adminName
-      };
+  req.admin = {
+    id: session.adminId,
+    email: session.adminEmail,
+    name: session.adminName
+  };
 
-      next();
-    })
-    .catch(err => {
-      console.error('Session validation error:', err);
-      res.redirect('/admin/login');
-    });
+  next();
 }
-
-// Protected admin routes
-app.get('/admin', requireAdmin, (req, res) => {
-  res.render('admin/dashboard', { admin: req.admin });
-});
 ```
 
----
-
-## Database Schema Example
-
-### PostgreSQL
+### Database Schema
 
 ```sql
 CREATE TABLE admin_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   token_hash VARCHAR(64) NOT NULL UNIQUE,
-  admin_id UUID NOT NULL,
+  admin_id VARCHAR(255) NOT NULL,
   admin_email VARCHAR(255) NOT NULL,
   admin_name VARCHAR(255),
   expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
   ip_address VARCHAR(45),
   user_agent TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE INDEX idx_admin_sessions_token_hash ON admin_sessions(token_hash);
-CREATE INDEX idx_admin_sessions_admin_id ON admin_sessions(admin_id);
 CREATE INDEX idx_admin_sessions_expires_at ON admin_sessions(expires_at);
-```
-
-### Prisma Schema
-
-```prisma
-model AdminSession {
-  id          String   @id @default(uuid())
-  tokenHash   String   @unique @map("token_hash")
-  adminId     String   @map("admin_id")
-  adminEmail  String   @map("admin_email")
-  adminName   String?  @map("admin_name")
-  expiresAt   DateTime @map("expires_at")
-  ipAddress   String?  @map("ip_address")
-  userAgent   String?  @map("user_agent")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  @@index([tokenHash])
-  @@index([adminId])
-  @@index([expiresAt])
-  @@map("admin_sessions")
-}
 ```
 
 ---
 
 ## Deployment Checklist
 
-- [ ] Register your application in Account Server (get `client_id`)
-- [ ] Configure `YOUR_APP_CLIENT_ID` environment variable
-- [ ] Configure `ACCOUNT_SERVER_URL` for production
-- [ ] Run database migrations (create `admin_sessions` table)
-- [ ] Create admin accounts in Account Server with admin role
-- [ ] Grant your application to admin accounts (via organization)
-- [ ] Enable MFA for admin accounts (recommended)
-- [ ] Test full login flow including MFA
-- [ ] Set up session cleanup job (optional but recommended)
-- [ ] Configure monitoring for failed login attempts
+- [ ] Register your application in Account Server
+- [ ] Enable admin OAuth for your application
+- [ ] Configure admin redirect URIs whitelist
+- [ ] Set environment variables:
+  - `ACCOUNT_SERVER_URL`
+  - `ADMIN_CLIENT_ID`
+  - `ADMIN_CLIENT_SECRET`
+  - `ADMIN_CALLBACK_URL`
+- [ ] Run database migration (create `admin_sessions` table)
+- [ ] Test SSO login flow in development
+- [ ] Test SSO login flow in staging/production
+- [ ] Set up session cleanup job (optional)
+- [ ] Configure monitoring for auth failures
 
 ---
 
 ## Troubleshooting
 
-### "Invalid credentials" but password is correct
+### "Invalid redirect URI"
+
+- Verify `ADMIN_CALLBACK_URL` matches exactly what's in `admin_redirect_uris`
+- Check protocol (http vs https)
+- Check port number
+
+### "Invalid client"
+
+- Verify `ADMIN_CLIENT_ID` is correct
+- Confirm application has `admin_oauth_enabled: true`
+- Check application isn't revoked
+
+### "Invalid state"
+
+- State parameter doesn't match session
+- Session may have expired or been cleared
+- Check session middleware configuration
+
+### "Token exchange failed"
+
+- Verify `ADMIN_CLIENT_SECRET` is correct
+- Check authorization code hasn't expired (5 minute TTL)
+- Ensure code hasn't been used (single-use)
+- Verify PKCE code_verifier matches original code_challenge
+
+### Admin can't log in
 
 - Verify admin account exists in Account Server
-- Check if account has `admin` role
-- Confirm account is active (email verified)
+- Check admin has permission to your application (organization membership)
+- Confirm account is active
 
-### "No permission" after successful login
+---
 
-- Verify `YOUR_APP_CLIENT_ID` is set correctly
-- Confirm admin's organization owns the application
-- Check that admin is a member of the organization
+## Migration from API-Based to SSO
 
-### MFA code always invalid
+If you're currently using the API-based approach with your own login form:
 
-- Verify time synchronization on admin's device
-- Check if MFA session token has expired (typically 5 minutes)
-- Ensure correct TOTP app is being used
+1. **Create new routes:**
+   - `GET /admin/login` → redirect to Account Server
+   - `GET /admin/callback` → handle OAuth callback
 
-### Session expires immediately
+2. **Keep existing session management** - your session table/logic stays the same
 
-- Check `expires_at` calculation uses correct timezone
-- Verify database stores timestamps correctly
-- Confirm cookie `maxAge` matches session TTL
+3. **Remove login form** - no longer needed
+
+4. **Update environment variables:**
+   - Add `ADMIN_CLIENT_SECRET`
+   - Add `ADMIN_CALLBACK_URL`
+
+5. **Register callback URL** in Account Server admin redirect URIs
+
+6. **Test thoroughly** before removing old login code
 
 ---
 
 ## Support
 
 - API Reference: See [API Reference](./api-reference.md)
-- Authentication Details: See [Authentication](./authentication.md)
 - Issues: Contact your organization administrator
