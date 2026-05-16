@@ -12,3 +12,4 @@ This guide has been restructured into focused chapters. See the [integration-gui
 8. [MFA](integration-guide/08-mfa.md) — TOTP setup, login flow, recovery codes
 9. [Service API](integration-guide/09-service-api.md) — Token validation, access checks (service-to-service)
 10. [Reference](integration-guide/10-reference.md) — Errors, rate limits, JWT verification, best practices
+11. [Teams](integration-guide/11-teams.md) — Teams + memberships (subgrouping users within an Organization)

@@ -59,6 +59,61 @@ Request:
 }
 ```
 
+### Optional `include` Parameter
+
+A comma-separated list of additional fields to return:
+
+| Value | Effect | Token types |
+|-------|--------|-------------|
+| `teams` | Adds the user's active team memberships to the response | `user` only |
+
+The parameter is opt-in to keep the hot validate path cheap for callers that don't need extras. Unknown values and values not meaningful for the token type are silently ignored.
+
+Request with includes:
+```json
+{
+  "token": "eyJhbGciOiJSUzI1NiIs...",
+  "include": "teams"
+}
+```
+
+Response (user token, `include=teams`):
+```json
+{
+  "valid": true,
+  "type": "user",
+  "user_id": "usr_def456",
+  "username": "johndoe",
+  "org": "acme-corp",
+  "scopes": ["openid", "profile"],
+  "expires_at": 1705312200,
+  "teams": [
+    { "team_id": "550e8400-e29b-41d4-a716-446655440000", "role": "author" },
+    { "team_id": "660e8400-e29b-41d4-a716-446655440001", "role": "member" }
+  ]
+}
+```
+
+Only **active** team memberships are included; archived teams are excluded.
+
+### Active Team Context Validation
+
+End-user apps signal the user's current team selection via the `X-Active-Team-Id` header (see [Teams §Active Team Context](11-teams.md#active-team-context)). The active team is intentionally **not** part of the JWT — it can change mid-session without re-issuing tokens.
+
+Pattern for backend services that need to honor `X-Active-Team-Id`:
+
+1. Extract the user JWT from the incoming request (`Authorization: Bearer <jwt>`).
+2. Read the inbound `X-Active-Team-Id` header.
+3. Call `POST /internal/validate?include=teams` with the user JWT.
+4. Confirm the inbound `team_id` is in the response's `teams` array; otherwise fall back to user-scope (treat as no team context).
+
+```bash
+curl -X POST https://auth.interactor.com/internal/validate \
+  -H "Authorization: Bearer <app_jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"token": "<user_jwt>", "include": "teams"}'
+```
+
 ### Error Responses
 
 | Response | Status | When |
@@ -132,5 +187,5 @@ Request:
 
 | Action | Method | Endpoint | Auth |
 |--------|--------|----------|------|
-| Validate Token | POST | `/internal/validate` | App JWT |
+| Validate Token | POST | `/internal/validate[?include=teams]` | App JWT |
 | Check App Access | POST | `/internal/check-app-access` | App JWT |
