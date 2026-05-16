@@ -102,7 +102,19 @@ Archives the team (`status: "archived"`). The row is preserved — this is a sof
 
 Response: the archived team JSON.
 
-To restore an archived team, call `PATCH` with `{"status": "active"}` is **not** supported in v1 — use the API directly via the underlying `Teams.activate_team/1` context function from a maintenance script, or contact your admin.
+## Restore (Activate) Team
+
+```
+POST /api/v1/admin/orgs/:org_name/teams/:team_id/activate
+```
+
+Restores an archived team to `status: "active"`. Idempotent — calling on an already-active team returns 200 with no change. Memberships are unaffected (they're never archived alongside the team).
+
+Response: the team JSON with `status: "active"`.
+
+| Error | Status | Description |
+|-------|--------|-------------|
+| Team not found in this org | 404 | Either the team doesn't exist or it belongs to a different org |
 
 ---
 
@@ -244,6 +256,7 @@ The active team is **not** baked into the user's JWT — the user can change con
 | Get Team | GET | `/api/v1/admin/orgs/:org_name/teams/:team_id` | Admin JWT + member |
 | Update Team | PATCH | `/api/v1/admin/orgs/:org_name/teams/:team_id` | Admin JWT + member |
 | Archive Team | DELETE | `/api/v1/admin/orgs/:org_name/teams/:team_id` | Admin JWT + member |
+| Restore Team | POST | `/api/v1/admin/orgs/:org_name/teams/:team_id/activate` | Admin JWT + member |
 | List Members | GET | `/api/v1/admin/orgs/:org_name/teams/:team_id/members` | Admin JWT + member |
 | Add Member | POST | `/api/v1/admin/orgs/:org_name/teams/:team_id/members` | Admin JWT + member |
 | Update Member Role | PATCH | `/api/v1/admin/orgs/:org_name/teams/:team_id/members/:user_id` | Admin JWT + member |
