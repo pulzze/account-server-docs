@@ -20,6 +20,8 @@ requires:
 
 # Interactor Setup and Authentication Skill
 
+_Last verified: 2026-06-18_
+
 Configure authentication for the Interactor platform to enable credential management, AI agents, and workflow automation.
 
 ## When to Use

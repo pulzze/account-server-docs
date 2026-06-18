@@ -6,6 +6,8 @@ author: Interactor Integration Guide
 
 # Interactor Credential Management Skill
 
+_Last verified: 2026-06-18_
+
 Securely store and manage OAuth tokens and API keys for external services through the Interactor platform.
 
 ## When to Use

@@ -1,5 +1,7 @@
 # Admin UI Integration Guide
 
+_Last verified: 2026-06-18_
+
 ## Building Admin Interfaces with Account Server Authentication
 
 **Version:** 2.0.0

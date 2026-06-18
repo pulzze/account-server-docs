@@ -1,5 +1,7 @@
 # Account Server Integration Guide
 
+_Last verified: 2026-06-18_
+
 This guide has been restructured into focused chapters. See the [integration-guide/](integration-guide/) directory:
 
 1. [Overview](integration-guide/01-overview.md) — Architecture, token types, authentication methods
