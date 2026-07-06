@@ -1,6 +1,6 @@
 # Reference
 
-Error codes, rate limits, JWT verification, and best practices.
+Error codes, rate limits, health checks, JWT verification, and best practices.
 
 ---
 
@@ -68,6 +68,75 @@ OAuth endpoints return standard OAuth error format:
 | Authenticated endpoints | 100 per minute per token |
 
 Rate-limited responses return HTTP 429 with a `Retry-After` header.
+
+---
+
+## Health & Readiness
+
+Account Server exposes health endpoints for load balancers, orchestrators, and uptime monitors. All three are unauthenticated. Every response includes a `docs_url` field pointing to the public documentation repo so operators can jump straight to the API docs from a probe.
+
+| Endpoint | Purpose | Checks dependencies? |
+|----------|---------|----------------------|
+| `GET /health` | Legacy combined health (kept for backward compatibility) | No |
+| `GET /health/live` | Liveness — is the process up? | No |
+| `GET /health/ready` | Readiness — are downstream dependencies reachable? | Yes |
+
+### GET /health (legacy)
+
+Returns `200` when the process is running. Fields: `status` (`"ok"`), `timestamp`, `version`, and `docs_url`.
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-07-06T12:00:00Z",
+  "version": "1.4.0",
+  "docs_url": "https://github.com/pulzze/account-server-docs"
+}
+```
+
+### GET /health/live
+
+Process-only liveness. Returns `200` as long as the application is running; it does **not** touch the database or other dependencies, so use it for orchestrator liveness probes. Fields: `status`, `check` (`"live"`), `service`, `version`, `docs_url`.
+
+```json
+{
+  "status": "ok",
+  "check": "live",
+  "service": "account-server",
+  "version": "1.4.0",
+  "docs_url": "https://github.com/pulzze/account-server-docs"
+}
+```
+
+### GET /health/ready
+
+Dependency-aware readiness. Returns `200` with `status`, `check` (`"ready"`), `service`, and a `components` map when every dependency check passes. Use it for readiness probes and to gate traffic behind a load balancer.
+
+```json
+{
+  "status": "ok",
+  "check": "ready",
+  "service": "account-server",
+  "components": {
+    "database": "ok"
+  },
+  "docs_url": "https://github.com/pulzze/account-server-docs"
+}
+```
+
+When a component check fails, the endpoint returns `503` with `status: "not_ready"` and the failing component marked in `components`:
+
+```json
+{
+  "status": "not_ready",
+  "check": "ready",
+  "service": "account-server",
+  "components": {
+    "database": "error"
+  },
+  "docs_url": "https://github.com/pulzze/account-server-docs"
+}
+```
 
 ---
 
