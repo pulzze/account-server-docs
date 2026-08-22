@@ -656,7 +656,7 @@ Exchanges authorization code for access token.
   "access_token": "eyJ...",
   "refresh_token": "eyJ...",
   "token_type": "Bearer",
-  "expires_in": 3600
+  "expires_in": 900
 }
 ```
 
