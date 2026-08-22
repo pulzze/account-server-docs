@@ -319,6 +319,43 @@ When using the `openid` scope, you receive an ID token:
 }
 ```
 
+### The shape of `aud`
+
+By default `aud` is a **bare string** holding your `client_id`, exactly as
+above. That is the case for every application today.
+
+An application can also be configured with extra audiences (its
+`allowed_audiences` setting). When it is, `aud` becomes an **array** — your
+`client_id` first, then the extras — and the token also carries an `azp`
+(authorized party) claim naming your `client_id`, as
+[OpenID Connect Core 1.0 §2](https://openid.net/specs/openid-connect-core-1_0.html#IDToken)
+requires once there is more than one audience:
+
+```json
+{
+  "iss": "https://auth.interactor.com",
+  "sub": "usr_abc123",
+  "aud": ["your_client_id", "service-knowledge-base"],
+  "azp": "your_client_id",
+  "exp": 1234567890,
+  "iat": 1234567890
+}
+```
+
+Your `client_id` is always present in `aud`, in both shapes — extra audiences
+are added to it, never substituted for it, so this configuration cannot take
+your own audience away. **No change is required on your side.** But if you parse
+`aud` yourself rather than through an OIDC library, be aware that a string is
+not the only possible shape; most OIDC libraries already accept either.
+
+---
+
+## Access Token Claims
+
+The access token returned from the same exchange derives its `aud` the same way
+— your `client_id` plus any extra audiences — but always as an array, even when
+there is only one entry. Access tokens carry no `azp`.
+
 ---
 
 ## OAuth Scopes
@@ -338,4 +375,8 @@ When using the `openid` scope, you receive an ID token:
 2. **Exchange codes server-side** — Never expose your `client_secret` to the browser
 3. **Use PKCE** for public clients (mobile apps, SPAs without a backend)
 4. **Verify token signatures** using the JWKS endpoint
-5. **Check the `aud` claim** matches your client_id
+5. **Check that your `client_id` is present in the `aud` claim** — `aud` may be a
+   single string or an array, and your `client_id` is always in it. Check for
+   presence rather than equality, and don't reject a token for carrying an
+   audience you don't recognise. Account Server itself does not check `aud`;
+   this is a check you choose to make.

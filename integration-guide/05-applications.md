@@ -29,6 +29,7 @@ Response:
       "application_type": "default",
       "redirect_uris": [],
       "grant_types": ["client_credentials"],
+      "allowed_audiences": [],
       "admin_redirect_uris": [],
       "admin_oauth_enabled": false,
       "last_used_at": "2026-01-20T14:00:00Z",
@@ -104,6 +105,9 @@ Updatable fields are grouped by category:
 |-------|-------------|
 | `redirect_uris` | Allowed redirect URIs for OAuth flows |
 | `grant_types` | Allowed grant types (e.g., `["client_credentials", "authorization_code"]`) |
+| `allowed_audiences` | Extra audiences to add to the `aud` claim of tokens minted for this application. Empty by default. |
+
+The application's own `client_id` is always the first entry in `aud` and is always present — `allowed_audiences` is *added to* it, never substituted for it, so setting this list cannot take a client's own audience away. It is returned on the application JSON (`"allowed_audiences": []` above) and defaults to an empty list, which is what every application has until someone sets it — so tokens carry exactly the audiences they carried before this field existed, and **no action is required** of the clients using this application. Account Server does not check `aud` on tokens presented to it; this list only decides what gets minted. See [OAuth / OIDC](07-oauth-oidc.md#the-shape-of-aud) for the effect on ID tokens.
 
 **Admin OAuth SSO:**
 

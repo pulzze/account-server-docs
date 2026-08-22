@@ -1,6 +1,6 @@
 # Admin UI Integration Guide
 
-_Last verified: 2026-06-18_
+_Last verified: 2026-08-22_
 
 ## Building Admin Interfaces with Account Server Authentication
 
@@ -252,6 +252,58 @@ Account Server issues admin SSO tokens with these claims:
   "iat": 1234567800
 }
 ```
+
+#### Where `aud` comes from
+
+`aud` is derived from your application: it is your `client_id`, followed by any
+extra audiences an administrator has set on the application's
+`allowed_audiences` list. Your `client_id` is always the first entry and is
+always present — extra audiences are **added to** it, never substituted for it.
+
+`allowed_audiences` is empty unless someone deliberately fills it in, so today
+every admin SSO token carries exactly `["app_xxxxx"]`, as shown above. Once it
+is populated, the same claim looks like this instead:
+
+```json
+{
+  "aud": ["app_xxxxx", "service-knowledge-base"]
+}
+```
+
+Nothing you rely on today stops being true — `aud` only ever gains entries, it
+never loses them — so **no change is required on your side**. If your code does
+inspect `aud`, check that your `client_id` is *present in* the list rather than
+that the list equals it, and treat entries you don't recognise as normal.
+
+Account Server does not reject a token because of its `aud`. The claim says who
+the token was minted for; whether to check it is your call.
+
+### Admin Refresh Token Claims
+
+`POST /oauth/admin/token` returns a `refresh_token` alongside the access token.
+It is a signed JWT too, and it now names the client it belongs to:
+
+```json
+{
+  "sub": "adm_xxxxx",
+  "type": "admin_refresh",
+  "client_id": "app_xxxxx",
+  "iss": "https://auth.interactor.com",
+  "aud": ["app_xxxxx"],
+  "exp": 1235172690,
+  "iat": 1234567890
+}
+```
+
+`aud` and `client_id` are new — refresh tokens carried neither before — and
+`aud` is derived exactly as it is for the access token above.
+
+Redeeming a refresh token is unchanged: `grant_type=refresh_token` checks the
+signature, the token type and the expiry, as it always did. Refresh tokens
+issued before this change keep redeeming for their full 7-day lifetime, and
+the two new claims are informational. Treat a refresh token as a credential
+for the `/oauth/admin/token` endpoint, not as a source of identity claims —
+read the admin's identity from the access token.
 
 ### Complete Example (Node.js/Express)
 
@@ -602,10 +654,13 @@ Exchanges authorization code for access token.
 ```json
 {
   "access_token": "eyJ...",
+  "refresh_token": "eyJ...",
   "token_type": "Bearer",
   "expires_in": 3600
 }
 ```
+
+The refresh token is a JWT carrying `aud` and `client_id` — see [Admin Refresh Token Claims](#admin-refresh-token-claims). Send it back to this endpoint with `grant_type=refresh_token` to get a new pair.
 
 **Error Responses:**
 

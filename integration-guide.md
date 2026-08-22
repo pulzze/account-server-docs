@@ -1,6 +1,6 @@
 # Account Server Integration Guide
 
-_Last verified: 2026-06-18_
+_Last verified: 2026-08-22_
 
 This guide has been restructured into focused chapters. See the [integration-guide/](integration-guide/) directory:
 

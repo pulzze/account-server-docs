@@ -20,7 +20,7 @@ requires:
 
 # Interactor Setup and Authentication Skill
 
-_Last verified: 2026-06-18_
+_Last verified: 2026-08-22_
 
 Configure authentication for the Interactor platform to enable credential management, AI agents, and workflow automation.
 
@@ -793,6 +793,16 @@ async function requestWithCacheInvalidation<T>(
 
 For scenarios where you need to verify Interactor JWTs locally (e.g., validating tokens passed from other services), use the JWKS endpoint.
 
+The examples below verify the signature and the `iss` claim. They deliberately
+do not verify `aud`: a client credentials token names every Interactor service
+that accepts it, so `aud` is a list rather than a single value, and that list
+gains entries over time. Pinning it would break the next time a service is
+added. If you do want an audience check, assert that your own audience is
+*present in* `aud` — and note that `aud` may be a bare string on OIDC ID
+tokens. Account Server enforces no audience of its own, and every `aud` value
+it mints is a superset of what it minted before, so no action is required on
+your side.
+
 ### Required Dependencies
 
 Install the JWT verification libraries for your language:
@@ -838,7 +848,7 @@ function getKey(header: JwtHeader, callback: SigningKeyCallback): void {
 interface InteractorTokenPayload {
   sub: string;           // Account UUID
   iss: string;           // https://auth.interactor.com
-  aud: string;           // Audience
+  aud: string | string[];  // Audience(s) — an array for client credentials tokens
   exp: number;           // Expiration timestamp
   iat: number;           // Issued at timestamp
   scope?: string;        // OAuth scopes

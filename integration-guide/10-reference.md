@@ -85,6 +85,29 @@ Returns the JSON Web Key Set for verifying token signatures. Cached with `Cache-
 
 ### Token Claims by Type
 
+Every token carries `iss` (`https://auth.interactor.com`), `iat` and `exp`;
+access and refresh tokens also carry `jti`; ID tokens do not.
+
+`aud` names the audiences a token was minted for, and it is derived one of two
+ways:
+
+- **Tokens issued for a specific OAuth client** — admin SSO, and access and ID
+  tokens from the authorization-code flow — carry that application's
+  `client_id`, plus any extra audiences configured on the application. The
+  `client_id` is always present.
+- **Tokens issued without a client** — admin login, client credentials, user
+  login — carry the platform audience registry: the list of Interactor services
+  that accept Account Server tokens. It is configuration rather than a fixed
+  list, and it gains entries as services are added.
+
+Account Server does not check `aud` on tokens presented to it — the claim
+describes who a token was minted for, and checking it is yours to do if you want
+to. Every audience below is a superset of what that token type carried before:
+audience lists only ever gain entries, never lose them, so **no action is
+required on your side**. If you do check, check that the audience you care
+about is **present in** `aud` rather than pinning the exact list, and don't
+treat an unfamiliar entry as a failure.
+
 **Administrator Token (`type: "admin"`):**
 
 | Claim | Description |
@@ -93,6 +116,21 @@ Returns the JSON Web Key Set for verifying token signatures. Cached with `Cache-
 | `type` | `"admin"` |
 | `email` | Administrator email |
 | `scopes` | Granted scopes |
+| `aud` | From `/oauth/admin/token` (SSO): your `client_id` plus the application's extra audiences. From `/api/v1/admin/login`: the platform audience registry |
+
+**Administrator Refresh Token (`type: "admin_refresh"`):**
+
+| Claim | Description |
+|-------|-------------|
+| `sub` | Administrator ID (`adm_*`) |
+| `type` | `"admin_refresh"` |
+| `client_id` | The client the token was issued to |
+| `aud` | Same as the admin SSO token it was issued alongside |
+
+Returned by `/oauth/admin/token` and presented back to it with
+`grant_type=refresh_token`. `aud` and `client_id` are new — this token carried
+neither before — and redemption is unchanged, so refresh tokens issued earlier
+still work.
 
 **Application Token (`type: "app"`):**
 
@@ -103,6 +141,7 @@ Returns the JSON Web Key Set for verifying token signatures. Cached with `Cache-
 | `client_id` | Application client ID |
 | `org` | Organization name |
 | `scopes` | Granted scopes |
+| `aud` | The platform audience registry — a client credentials token is not bound to one service |
 
 **User Token (`type: "user"`):**
 
@@ -113,6 +152,10 @@ Returns the JSON Web Key Set for verifying token signatures. Cached with `Cache-
 | `org` | Organization name |
 | `username` | Username |
 | `scopes` | Granted scopes |
+| `aud` | From the OIDC authorization-code flow: the application's `client_id` plus its extra audiences. From `/users/login` or SAML: the platform audience registry |
+
+ID token claims, including when `aud` is a string and when it is an array, are
+in [OAuth / OIDC](07-oauth-oidc.md#id-token-claims).
 
 ### Example: Node.js Verification
 
