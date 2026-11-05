@@ -4,7 +4,7 @@ Minimal steps to go from zero to making authenticated API calls.
 
 ## 1. Register as an Administrator
 
-Registration creates your admin account, first organization, and a default application — all in one step.
+Registration creates your admin account and first organization. It issues no application or credentials yet: those come once you confirm your email address (step 2).
 
 ```bash
 curl -X POST https://auth.interactor.com/api/v1/admin/register \
@@ -21,7 +21,6 @@ curl -X POST https://auth.interactor.com/api/v1/admin/register \
 | `email` | Yes | — | Administrator email |
 | `password` | Yes | — | Min 12 chars, uppercase, lowercase, number, special char |
 | `org_name` | No | Derived from email | Organization slug (3-50 chars, lowercase, hyphens, starts with letter) |
-| `app_name` | No | `"default-app"` | Name for the auto-created application |
 
 Response (201):
 ```json
@@ -31,27 +30,31 @@ Response (201):
   "organization": {
     "id": "org_uuid",
     "name": "your-company"
-  },
-  "application": {
-    "id": "app_uuid",
-    "name": "default-app",
-    "client_id": "app_xyz789",
-    "client_secret": "sec_STORE_THIS_SECURELY"
   }
 }
 ```
 
-> **Important:** Save the `client_secret` immediately — it is only shown once.
-
-> **Note:** `verification_token` is included in the response in development mode or if email delivery fails.
-
 ## 2. Verify Email
 
-Click the link in your verification email, or call:
+Click the link in your verification email. It opens a page that asks for the password you chose in step 1. Once you enter it:
+
+- your address is confirmed;
+- your organization's default application (`default-app`) is created;
+- its `client_id` and `client_secret` are shown.
+
+> **Important:** Save the `client_secret` immediately — it is only shown once.
+
+Opening the link on its own confirms nothing, so a mail scanner that opens it first does no harm. A wrong password leaves the link usable.
+
+To confirm from a script instead, send the token from the link together with the password:
 
 ```bash
-curl "https://auth.interactor.com/api/v1/admin/verify-email?token=YOUR_TOKEN"
+curl -i -X POST https://auth.interactor.com/api/v1/admin/verify-email \
+  -H "Content-Type: application/json" \
+  -d '{"token": "YOUR_TOKEN", "password": "SecureP@ssw0rd!"}'
 ```
+
+For a new sign-up the reply is a `302` to the page that shows the new application's credentials. Open that address in a browser within five minutes. Errors: `400 password_required`, `401 invalid_password`, or `400` for an unknown, expired or already used link.
 
 If you didn't receive the email:
 
