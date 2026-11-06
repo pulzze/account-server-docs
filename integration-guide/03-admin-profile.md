@@ -55,7 +55,7 @@ What happens next:
 - A newer request replaces an earlier one that is still waiting.
 - To cancel a change that is still waiting, send `PATCH /api/v1/admin` with the account's current address (and `current_password`). Changing or resetting the password also cancels it.
 
-Without `email`, or with the account's current address, nothing changes and the answer is `200` with `admin_id` and `email`.
+Without `email`, or with the account's current address, the answer is `200` with `admin_id` and `email`, and the address does not change (with the current address, a change still waiting is cancelled).
 
 Errors:
 
