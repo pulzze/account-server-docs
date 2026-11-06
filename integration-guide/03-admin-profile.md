@@ -50,9 +50,10 @@ Response (`202 Accepted`):
 
 What happens next:
 - The account keeps its current email until the change is confirmed. Sign-in, password resets and tokens all use the current address meanwhile.
-- A confirmation link is sent to the new address. It opens a page that asks for the account's password; the email changes only when that page is sent with the right one. The link works for 24 hours.
-- The current address gets a notice that a change was requested. The notice has no link.
+- A confirmation link is sent to the new address. It opens a page that asks for the account's password; the email changes only when that page is sent with the right one. The link works for 24 hours, and stops working after 5 wrong passwords.
+- The current address gets a notice that a change was requested. The notice has no link. Once the change is confirmed, the previous address gets a second notice.
 - A newer request replaces an earlier one that is still waiting.
+- To cancel a change that is still waiting, send `PATCH /api/v1/admin` with the account's current address (and `current_password`). Changing or resetting the password also cancels it.
 
 Without `email`, or with the account's current address, nothing changes and the answer is `200` with `admin_id` and `email`.
 
